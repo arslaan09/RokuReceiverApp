@@ -1,10 +1,348 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>My Website</title>
+  <meta charset="UTF-8">
+  <title>Screen Mirror Receiver</title>
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #0a0a0a;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    /* ── Splash screen ── */
+    #splash {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      color: #fff; z-index: 10;
+      background: linear-gradient(160deg, #0d0d1a 0%, #0a1628 100%);
+    }
+
+    #splash.hidden { display: none; }
+
+    .logo {
+      width: 100px; height: 100px;
+      background: #1e3a5f;
+      border-radius: 24px;
+      display: flex; justify-content: center; align-items: center;
+      margin-bottom: 32px;
+      animation: pulse 2.5s ease-in-out infinite;
+    }
+
+    .logo svg { width: 52px; height: 52px; fill: #60a5fa; }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50%       { transform: scale(1.04); opacity: 0.85; }
+    }
+
+    .title    { font-size: 40px; font-weight: 600; letter-spacing: -0.5px; margin-bottom: 10px; }
+    .subtitle { font-size: 18px; color: rgba(255,255,255,0.5); margin-bottom: 44px; }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 32px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 100px;
+    }
+
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #fbbf24;
+      animation: blink 1.6s ease-in-out infinite;
+    }
+    .dot.ready     { background: #fbbf24; }
+    .dot.connected { background: #4ade80; animation: none; }
+    .dot.streaming { background: #60a5fa; animation: none; }
+    .dot.error     { background: #f87171; animation: none; }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    #statusText { font-size: 17px; color: rgba(255,255,255,0.75); }
+
+    /* ── MJPEG frame ── */
+    #mjpeg {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      background: #000;
+      display: none; z-index: 5;
+      /* GPU layer — avoids repaint on every frame */
+      will-change: contents;
+      transform: translateZ(0);
+      image-rendering: auto;
+    }
+
+    /* ── Overlay bar (shown during mirroring) ── */
+    #overlay {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      display: none;
+      align-items: center; gap: 10px;
+      padding: 10px 24px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 100px;
+      z-index: 20;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    #overlay .dot  { width: 8px; height: 8px; }
+    #overlayText   { font-size: 14px; color: rgba(255,255,255,0.8); }
+  </style>
 </head>
 <body>
-  <h1>Hello World 👋</h1>
-  <p>This is my first GitHub Pages site.</p>
+
+  <!-- Splash / idle screen -->
+  <div id="splash">
+    <div class="logo">
+      <svg viewBox="0 0 24 24">
+        <path d="M21 3H3C1.9 3 1 3.9 1 5v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0
+                 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18M16 11 9 15V7z"/>
+      </svg>
+    </div>
+    <div class="title">Screen Mirror</div>
+    <div class="subtitle" id="deviceName">Waiting for connection…</div>
+    <div class="status-pill">
+      <div class="dot ready" id="dot"></div>
+      <span id="statusText">Ready to receive</span>
+    </div>
+  </div>
+
+  <!-- MJPEG frame viewer -->
+  <img id="mjpeg" alt="mirrored screen">
+
+  <!-- Thin status bar shown during active mirroring -->
+  <div id="overlay">
+    <div class="dot streaming" id="overlayDot"></div>
+    <span id="overlayText">Mirroring</span>
+  </div>
+
+  <script>
+    // ─────────────────────────────────────────────────────────────────
+    //  Cast SDK bootstrap
+    // ─────────────────────────────────────────────────────────────────
+    const ctx     = cast.framework.CastReceiverContext.getInstance();
+    const NS       = 'urn:x-cast:com.tvmirror.screenmirror';
+
+    // ─────────────────────────────────────────────────────────────────
+    //  DOM refs
+    // ─────────────────────────────────────────────────────────────────
+    const splash     = document.getElementById('splash');
+    const mjpeg      = document.getElementById('mjpeg');
+    const overlay    = document.getElementById('overlay');
+    const dot        = document.getElementById('dot');
+    const statusText = document.getElementById('statusText');
+    const deviceName = document.getElementById('deviceName');
+    const overlayText= document.getElementById('overlayText');
+
+    // ─────────────────────────────────────────────────────────────────
+    //  State
+    // ─────────────────────────────────────────────────────────────────
+    let active       = false;   // mirroring currently running
+    let currentUrl   = '';      // base MJPEG URL
+    let retryCount   = 0;
+    const MAX_RETRY  = 4;
+
+    // Timers
+    let errorTimer   = null;
+    let retryTimer   = null;
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Stall watchdog
+    //  The <img> onerror may NOT fire when the iOS broadcast extension
+    //  dies and TCP is closed silently. Probe the server every 8 s.
+    // ─────────────────────────────────────────────────────────────────
+    let watchdog         = null;
+    let probeFailures    = 0;
+    const PROBE_INTERVAL = 8000;
+    const MAX_PROBE_FAIL = 2;
+
+    function startWatchdog() {
+      stopWatchdog();
+      probeFailures = 0;
+      watchdog = setInterval(() => {
+        if (!active || !currentUrl) { stopWatchdog(); return; }
+        let probeUrl;
+        try   { probeUrl = new URL(currentUrl).origin + '/?_p=' + Date.now(); }
+        catch { return; }
+        const ctrl = new AbortController();
+        const to   = setTimeout(() => ctrl.abort(), 4000);
+        fetch(probeUrl, { signal: ctrl.signal, mode: 'no-cors' })
+          .then(() => { clearTimeout(to); probeFailures = 0; })
+          .catch(() => {
+            clearTimeout(to);
+            if (++probeFailures >= MAX_PROBE_FAIL) {
+              log('Watchdog: server gone — stopping mirror');
+              stopMirroring();
+            }
+          });
+      }, PROBE_INTERVAL);
+    }
+
+    function stopWatchdog() {
+      if (watchdog) { clearInterval(watchdog); watchdog = null; }
+      probeFailures = 0;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Helpers
+    // ─────────────────────────────────────────────────────────────────
+    function log(msg) { console.log('[MIRROR] ' + msg); }
+
+    function setStatus(label, dotClass) {
+      statusText.textContent = label;
+      dot.className = 'dot ' + dotClass;
+    }
+
+    function send(obj) {
+      try { ctx.sendCustomMessage(NS, undefined, obj); } catch {}
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Mirroring — start / retry / stop
+    // ─────────────────────────────────────────────────────────────────
+    function startMirroring(url) {
+      log('startMirroring: ' + url);
+      stopMirroring();           // clean any previous session first
+
+      active       = true;
+      currentUrl   = url;
+      retryCount   = 0;
+
+      splash.classList.add('hidden');
+      mjpeg.style.display = 'block';
+      overlay.style.display = 'flex';
+
+      attachHandlers(url);
+      mjpeg.src = url;
+
+      startWatchdog();
+      setStatus('Connecting…', 'ready');
+    }
+
+    function attachHandlers(url) {
+      mjpeg.onerror = () => {
+        if (!active) return;
+        log('onerror (retry ' + (retryCount + 1) + ')');
+        clearTimeout(errorTimer);
+        errorTimer = setTimeout(retryMirroring, 2000);
+      };
+
+      mjpeg.onload = () => {
+        // Fires on the first frame delivered
+        clearTimeout(errorTimer);
+        clearTimeout(retryTimer);
+        retryCount = 0;
+        overlayText.textContent = 'Mirroring';
+        setStatus('Mirroring screen', 'streaming');
+        send({ type: 'MIRROR_STARTED' });
+      };
+    }
+
+    function retryMirroring() {
+      if (!active) return;
+      if (++retryCount > MAX_RETRY) {
+        log('Max retries reached — stopping');
+        stopMirroring();
+        return;
+      }
+      const delay = Math.min(5000, retryCount * 1200);
+      log('Retry #' + retryCount + ' in ' + delay + 'ms');
+      overlayText.textContent = 'Reconnecting…';
+      setStatus('Reconnecting…', 'ready');
+
+      retryTimer = setTimeout(() => {
+        if (!active) return;
+        const sep = currentUrl.includes('?') ? '&' : '?';
+        const url  = currentUrl + sep + '_r=' + Date.now();
+        attachHandlers(url);
+        mjpeg.src = url;
+      }, delay);
+    }
+
+    function stopMirroring() {
+      log('stopMirroring');
+      active     = false;
+      currentUrl = '';
+      retryCount = 0;
+
+      clearTimeout(errorTimer); errorTimer = null;
+      clearTimeout(retryTimer); retryTimer = null;
+      stopWatchdog();
+
+      mjpeg.onerror = null;
+      mjpeg.onload  = null;
+      mjpeg.src     = '';
+      mjpeg.style.display = 'none';
+      overlay.style.display = 'none';
+
+      returnToSplash();
+    }
+
+    function returnToSplash() {
+      splash.classList.remove('hidden');
+      deviceName.textContent = 'Waiting for connection…';
+      setStatus('Ready to receive', 'ready');
+      dot.classList.remove('connected', 'streaming', 'error');
+      dot.classList.add('ready');
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Custom message handler (from iOS sender)
+    // ─────────────────────────────────────────────────────────────────
+    ctx.addCustomMessageListener(NS, event => {
+      let d = event.data;
+      if (typeof d === 'string') {
+        try { d = JSON.parse(d); } catch { return; }
+      }
+      log('msg type=' + (d.type || '?'));
+
+      switch (d.type) {
+
+        case 'CONNECTION_ESTABLISHED':
+          deviceName.textContent = 'Connected to ' + (d.deviceName || 'iOS Device');
+          setStatus('Connected', 'connected');
+          send({ type: 'RECEIVER_READY' });
+          break;
+
+        case 'START_MIRRORING':
+          if (d.streamUrl) startMirroring(d.streamUrl);
+          break;
+
+        case 'STOP_MIRRORING':
+          stopMirroring();
+          break;
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Sender disconnect
+    // ─────────────────────────────────────────────────────────────────
+    ctx.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+      if (ctx.getSenders().length > 0) return;
+      if (active) {
+        // Broadcast extension may still be alive — reduce retry patience
+        log('Sender gone during active mirror — reducing retries');
+        retryCount = MAX_RETRY;
+      } else {
+        returnToSplash();
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Start the receiver (never idle out)
+    // ─────────────────────────────────────────────────────────────────
+    const opts = new cast.framework.CastReceiverOptions();
+    opts.disableIdleTimeout = true;
+    opts.maxInactivity = 86400;
+    ctx.start(opts);
+  </script>
 </body>
 </html>
