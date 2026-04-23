@@ -1,348 +1,952 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="UTF-8">
   <title>Screen Mirror Receiver</title>
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
-    html, body {
-      width: 100%; height: 100%;
-      background: #0a0a0a;
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
       font-family: 'Segoe UI', system-ui, sans-serif;
       overflow: hidden;
     }
 
-    /* ── Splash screen ── */
     #splash {
-      position: absolute; inset: 0;
-      display: flex; flex-direction: column;
-      justify-content: center; align-items: center;
-      color: #fff; z-index: 10;
-      background: linear-gradient(160deg, #0d0d1a 0%, #0a1628 100%);
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      z-index: 10;
     }
-
-    #splash.hidden { display: none; }
 
     .logo {
-      width: 100px; height: 100px;
-      background: #1e3a5f;
-      border-radius: 24px;
-      display: flex; justify-content: center; align-items: center;
-      margin-bottom: 32px;
-      animation: pulse 2.5s ease-in-out infinite;
+      width: 120px;
+      height: 120px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 30px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 40px;
+      box-shadow: 0 20px 40px rgba(102, 126, 234, 0.3);
+      animation: pulse 2s ease-in-out infinite;
     }
 
-    .logo svg { width: 52px; height: 52px; fill: #60a5fa; }
+    .logo svg {
+      width: 60px;
+      height: 60px;
+      fill: white;
+    }
 
     @keyframes pulse {
-      0%, 100% { transform: scale(1); opacity: 1; }
-      50%       { transform: scale(1.04); opacity: 0.85; }
+
+      0%,
+      100% {
+        transform: scale(1);
+      }
+
+      50% {
+        transform: scale(1.05);
+      }
     }
 
-    .title    { font-size: 40px; font-weight: 600; letter-spacing: -0.5px; margin-bottom: 10px; }
-    .subtitle { font-size: 18px; color: rgba(255,255,255,0.5); margin-bottom: 44px; }
-
-    .status-pill {
-      display: flex; align-items: center; gap: 12px;
-      padding: 14px 32px;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 100px;
+    .title {
+      font-size: 48px;
+      font-weight: 700;
+      margin-bottom: 15px;
     }
 
-    .dot {
-      width: 10px; height: 10px; border-radius: 50%;
+    .subtitle {
+      font-size: 24px;
+      opacity: 0.8;
+      margin-bottom: 50px;
+    }
+
+    .status-container {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      padding: 20px 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 50px;
+      backdrop-filter: blur(10px);
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
       background: #fbbf24;
-      animation: blink 1.6s ease-in-out infinite;
+      border-radius: 50%;
+      animation: blink 1.5s ease-in-out infinite;
     }
-    .dot.ready     { background: #fbbf24; }
-    .dot.connected { background: #4ade80; animation: none; }
-    .dot.streaming { background: #60a5fa; animation: none; }
-    .dot.error     { background: #f87171; animation: none; }
 
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .status-dot.connected {
+      background: #4ade80;
+    }
 
-    #statusText { font-size: 17px; color: rgba(255,255,255,0.75); }
+    @keyframes blink {
 
-    /* ── MJPEG frame ── */
-    #mjpeg {
-      position: absolute; inset: 0;
-      width: 100%; height: 100%;
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
+    }
+
+    .status-text {
+      font-size: 20px;
+    }
+
+    #video-player {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       object-fit: contain;
-      background: #000;
-      display: none; z-index: 5;
-      /* GPU layer — avoids repaint on every frame */
-      will-change: contents;
-      transform: translateZ(0);
-      image-rendering: auto;
-    }
-
-    /* ── Overlay bar (shown during mirroring) ── */
-    #overlay {
-      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: black;
       display: none;
-      align-items: center; gap: 10px;
-      padding: 10px 24px;
-      background: rgba(0,0,0,0.55);
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 100px;
-      z-index: 20;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
+      z-index: 5;
     }
 
-    #overlay .dot  { width: 8px; height: 8px; }
-    #overlayText   { font-size: 14px; color: rgba(255,255,255,0.8); }
+    .hidden {
+      display: none !important;
+    }
+
+    /* ── Audio Playback Overlay ──────────────────────────────────── */
+    #audio-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 8;
+      color: white;
+    }
+
+    .audio-disc-container {
+      position: relative;
+      width: 280px;
+      height: 280px;
+      margin-bottom: 50px;
+    }
+
+    /* Outer glow ring */
+    .audio-disc-glow {
+      position: absolute;
+      top: -20px;
+      left: -20px;
+      width: 320px;
+      height: 320px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(102, 126, 234, 0.3) 0%, transparent 70%);
+      animation: glow-pulse 3s ease-in-out infinite;
+    }
+
+    @keyframes glow-pulse {
+      0%, 100% { transform: scale(1); opacity: 0.6; }
+      50% { transform: scale(1.15); opacity: 1; }
+    }
+
+    /* Vinyl disc */
+    .audio-disc {
+      position: relative;
+      width: 280px;
+      height: 280px;
+      border-radius: 50%;
+      background: 
+        radial-gradient(circle at center, #1a1a2e 15%, transparent 16%),
+        radial-gradient(circle at center, transparent 30%, rgba(255,255,255,0.03) 31%, transparent 32%),
+        radial-gradient(circle at center, transparent 45%, rgba(255,255,255,0.03) 46%, transparent 47%),
+        radial-gradient(circle at center, transparent 60%, rgba(255,255,255,0.03) 61%, transparent 62%),
+        radial-gradient(circle at center, transparent 75%, rgba(255,255,255,0.03) 76%, transparent 77%),
+        linear-gradient(135deg, #2d2d44 0%, #1a1a2e 100%);
+      box-shadow: 0 0 60px rgba(102, 126, 234, 0.2),
+                  inset 0 0 30px rgba(0, 0, 0, 0.5);
+      animation: spin-disc 8s linear infinite;
+    }
+
+    .audio-disc.paused {
+      animation-play-state: paused;
+    }
+
+    @keyframes spin-disc {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Center label on disc */
+    .audio-disc-center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    .audio-disc-center svg {
+      width: 40px;
+      height: 40px;
+      fill: white;
+    }
+
+    /* Track info */
+    .audio-track-info {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .audio-now-playing {
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 4px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 12px;
+    }
+
+    .audio-track-title {
+      font-size: 28px;
+      font-weight: 600;
+      color: white;
+      max-width: 600px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Equalizer bars */
+    .audio-equalizer {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 50px;
+    }
+
+    .eq-bar {
+      width: 8px;
+      background: linear-gradient(to top, #667eea, #764ba2);
+      border-radius: 4px;
+      animation: eq-bounce 1.2s ease-in-out infinite;
+    }
+
+    .eq-bar.paused {
+      animation-play-state: paused;
+      height: 8px !important;
+    }
+
+    .eq-bar:nth-child(1) { animation-delay: 0s; }
+    .eq-bar:nth-child(2) { animation-delay: 0.15s; }
+    .eq-bar:nth-child(3) { animation-delay: 0.3s; }
+    .eq-bar:nth-child(4) { animation-delay: 0.45s; }
+    .eq-bar:nth-child(5) { animation-delay: 0.6s; }
+    .eq-bar:nth-child(6) { animation-delay: 0.75s; }
+    .eq-bar:nth-child(7) { animation-delay: 0.9s; }
+    .eq-bar:nth-child(8) { animation-delay: 0.2s; }
+    .eq-bar:nth-child(9) { animation-delay: 0.5s; }
+
+    @keyframes eq-bounce {
+      0%, 100% { height: 8px; }
+      25% { height: 35px; }
+      50% { height: 18px; }
+      75% { height: 45px; }
+    }
+
   </style>
 </head>
-<body>
 
-  <!-- Splash / idle screen -->
+<body>
   <div id="splash">
     <div class="logo">
       <svg viewBox="0 0 24 24">
-        <path d="M21 3H3C1.9 3 1 3.9 1 5v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0
-                 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18M16 11 9 15V7z"/>
+        <path
+          d="M21,3H3C1.89,3 1,3.89 1,5V17A2,2 0 0,0 3,19H8V21H16V19H21A2,2 0 0,0 23,17V5C23,3.89 22.1,3 21,3M21,17H3V5H21M16,11L9,15V7" />
       </svg>
     </div>
-    <div class="title">Screen Mirror</div>
-    <div class="subtitle" id="deviceName">Waiting for connection…</div>
-    <div class="status-pill">
-      <div class="dot ready" id="dot"></div>
-      <span id="statusText">Ready to receive</span>
+    <div class="title">Screen Mirroring -Miracast</div>
+    <div class="subtitle" id="connectionMessage">Waiting for connection...</div>
+    <div class="status-container">
+      <div class="status-dot" id="statusDot"></div>
+      <div class="status-text" id="statusText">Ready to receive</div>
     </div>
   </div>
 
-  <!-- MJPEG frame viewer -->
-  <img id="mjpeg" alt="mirrored screen">
-
-  <!-- Thin status bar shown during active mirroring -->
-  <div id="overlay">
-    <div class="dot streaming" id="overlayDot"></div>
-    <span id="overlayText">Mirroring</span>
+  <!-- Audio Playback Overlay -->
+  <div id="audio-overlay">
+    <div class="audio-disc-container">
+      <div class="audio-disc-glow"></div>
+      <div class="audio-disc" id="audioDisc">
+        <div class="audio-disc-center">
+          <svg viewBox="0 0 24 24">
+            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55C7.79 13 6 14.79 6 17s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="audio-track-info">
+      <div class="audio-now-playing">Now Playing</div>
+      <div class="audio-track-title" id="audioTrackTitle">Music</div>
+    </div>
+    <div class="audio-equalizer" id="audioEqualizer">
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+    </div>
   </div>
 
+  <video id="video-player" autoplay playsinline muted></video>
+  <img id="mjpeg-viewer" class="hidden"
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; background: black; will-change: contents; transform: translateZ(0); image-rendering: auto;">
+  <video id="media-player" class="hidden" playsinline preload="auto"
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 7; background: black;"></video>
+  <img id="image-viewer" class="hidden"
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 6; background: black;">
+
   <script>
-    // ─────────────────────────────────────────────────────────────────
-    //  Cast SDK bootstrap
-    // ─────────────────────────────────────────────────────────────────
-    const ctx     = cast.framework.CastReceiverContext.getInstance();
-    const NS       = 'urn:x-cast:com.tvmirror.screenmirror';
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = context.getPlayerManager();
 
-    // ─────────────────────────────────────────────────────────────────
-    //  DOM refs
-    // ─────────────────────────────────────────────────────────────────
-    const splash     = document.getElementById('splash');
-    const mjpeg      = document.getElementById('mjpeg');
-    const overlay    = document.getElementById('overlay');
-    const dot        = document.getElementById('dot');
+    const splash = document.getElementById('splash');
+    const videoPlayer = document.getElementById('video-player');
+    const mjpegViewer = document.getElementById('mjpeg-viewer');
+    const mediaPlayer = document.getElementById('media-player');
+    const imageViewer = document.getElementById('image-viewer');
+    const castMediaPlayer = document.getElementById('cast-media-player');
+    const connectionMessage = document.getElementById('connectionMessage');
     const statusText = document.getElementById('statusText');
-    const deviceName = document.getElementById('deviceName');
-    const overlayText= document.getElementById('overlayText');
+    const statusDot = document.getElementById('statusDot');
+    const audioOverlay = document.getElementById('audio-overlay');
+    const audioDisc = document.getElementById('audioDisc');
+    const audioTrackTitle = document.getElementById('audioTrackTitle');
+    const audioEqualizer = document.getElementById('audioEqualizer');
 
-    // ─────────────────────────────────────────────────────────────────
-    //  State
-    // ─────────────────────────────────────────────────────────────────
-    let active       = false;   // mirroring currently running
-    let currentUrl   = '';      // base MJPEG URL
-    let retryCount   = 0;
-    const MAX_RETRY  = 4;
+    const NAMESPACE = 'urn:x-cast:com.tvmirror.screenmirror';
 
-    // Timers
-    let errorTimer   = null;
-    let retryTimer   = null;
+    // Flag to suppress error handlers during intentional media stop
+    var mediaStopping = false;
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Stall watchdog
-    //  The <img> onerror may NOT fire when the iOS broadcast extension
-    //  dies and TCP is closed silently. Probe the server every 8 s.
-    // ─────────────────────────────────────────────────────────────────
-    let watchdog         = null;
-    let probeFailures    = 0;
-    const PROBE_INTERVAL = 8000;
-    const MAX_PROBE_FAIL = 2;
+    // Flag to track if we're playing audio (for overlay display)
+    var isAudioMode = false;
 
-    function startWatchdog() {
-      stopWatchdog();
-      probeFailures = 0;
-      watchdog = setInterval(() => {
-        if (!active || !currentUrl) { stopWatchdog(); return; }
-        let probeUrl;
-        try   { probeUrl = new URL(currentUrl).origin + '/?_p=' + Date.now(); }
-        catch { return; }
-        const ctrl = new AbortController();
-        const to   = setTimeout(() => ctrl.abort(), 4000);
+    // ── Connection state tracking ─────────────────────────────────────
+    // Remembers whether a sender (iOS app) is actively connected so
+    // returnToSplash() can show the correct status instead of always
+    // reverting to "Waiting for connection...".
+    var senderConnected = false;
+    var connectedDeviceName = '';
+
+    // ── Status reporting ──────────────────────────────────────────────
+    // Send playback state back to the iOS sender so it can sync the local player.
+    let statusInterval = null;
+
+    function sendStatus(state) {
+      try {
+        const msg = {
+          type: 'MEDIA_STATUS',
+          state: state,
+          currentTime: mediaPlayer.currentTime || 0,
+          duration: (mediaPlayer.duration && isFinite(mediaPlayer.duration)) ? mediaPlayer.duration : 0
+        };
+        context.sendCustomMessage(NAMESPACE, undefined, msg);
+      } catch (e) { /* sender may not be connected yet */ }
+    }
+
+    function startStatusReporting() {
+      if (statusInterval) return;
+      // Report position every second while playing so iOS can drift-correct
+      statusInterval = setInterval(() => {
+        if (!mediaPlayer.paused && !mediaPlayer.ended) {
+          sendStatus('playing');
+        }
+      }, 1000);
+    }
+
+    function stopStatusReporting() {
+      if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
+    }
+
+    // Wire up media player events → send status to iOS
+    mediaPlayer.addEventListener('playing', () => {
+      sendStatus('playing');
+      startStatusReporting();
+      // Update audio overlay animation state
+      if (isAudioMode) {
+        audioDisc.classList.remove('paused');
+        setEqBarsPaused(false);
+      }
+    });
+    mediaPlayer.addEventListener('pause', () => {
+      if (!mediaStopping) {
+        stopStatusReporting();
+        sendStatus('paused');
+        // Update audio overlay animation state
+        if (isAudioMode) {
+          audioDisc.classList.add('paused');
+          setEqBarsPaused(true);
+        }
+      }
+    });
+    mediaPlayer.addEventListener('waiting', () => { if (!mediaStopping) sendStatus('buffering'); });
+    mediaPlayer.addEventListener('ended', () => {
+      stopStatusReporting();
+      sendStatus('ended');
+      // Stay on last frame — don't return to splash.
+      // The user can replay, go next, or stop from the mobile controls.
+      if (isAudioMode) {
+        audioDisc.classList.add('paused');
+        setEqBarsPaused(true);
+      }
+    });
+    mediaPlayer.addEventListener('error', () => {
+      // Ignore errors during intentional stop
+      if (mediaStopping) return;
+      stopStatusReporting();
+      sendStatus('idle');
+    });
+    // Unmute after first frame arrives (Chromecast may require muted autoplay first)
+    mediaPlayer.addEventListener('loadeddata', () => {
+      console.log('[RECEIVER] loadeddata — unmuting');
+      mediaPlayer.muted = false;
+    });
+    mediaPlayer.addEventListener('seeked', () => {
+      sendStatus(mediaPlayer.paused ? 'paused' : 'playing');
+    });
+
+    // Helper: set equalizer bars paused or playing
+    function setEqBarsPaused(paused) {
+      var bars = audioEqualizer.querySelectorAll('.eq-bar');
+      for (var i = 0; i < bars.length; i++) {
+        if (paused) {
+          bars[i].classList.add('paused');
+        } else {
+          bars[i].classList.remove('paused');
+        }
+      }
+    }
+
+    // ── Custom message handler ────────────────────────────────────────
+    context.addCustomMessageListener(NAMESPACE, (event) => {
+      let data = event.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { return; }
+      }
+      console.log('[RECEIVER] Got message type=' + (data.type || '?'));
+
+      if (data.type === 'CONNECTION_ESTABLISHED') {
+        senderConnected = true;
+        connectedDeviceName = data.deviceName || 'iOS Device';
+        connectionMessage.textContent = 'Connected to ' + connectedDeviceName;
+        statusText.textContent = 'Connected — Ready to cast';
+        statusDot.classList.add('connected');
+      }
+
+      if (data.type === 'START_MIRRORING') {
+        stopAllMedia();
+        hideAudioOverlay();
+        if (data.streamUrl) startMirroring(data.streamUrl);
+      }
+
+      if (data.type === 'STOP_MIRRORING') stopMirroring();
+
+      // STOP_CASTING: user left the video/audio/image player screen.
+      // Stop playback and return to splash — but keep the receiver alive
+      // so the user can cast something else without reconnecting.
+      if (data.type === 'STOP_CASTING') {
+        console.log('[RECEIVER] STOP_CASTING received — returning to splash');
+        returnToSplash();
+      }
+
+      if (data.type === 'CAST_IMAGE_WS') {
+        cleanupMirroringConnection();
+        cleanupImageCastingWS();
+        stopMediaCasting();
+        hideAudioOverlay();
+        startImageCastingWS(data.streamUrl);
+        videoPlayer.style.display = 'none';
+        imageViewer.classList.remove('hidden');
+        imageViewer.style.display = 'block';
+        statusText.textContent = 'Waiting for Image...';
+      }
+
+      if (data.type === 'CAST_VIDEO') {
+        cleanupMirroringConnection();
+        cleanupImageCastingWS();
+        stopImageCasting();
+        hideAudioOverlay();
+        isAudioMode = false;
+        playMedia(data.videoUrl, data.autoplay !== false);  // default autoplay=true
+        statusText.textContent = 'Video Loading...';
+      }
+
+      if (data.type === 'CAST_AUDIO') {
+        cleanupMirroringConnection();
+        cleanupImageCastingWS();
+        stopImageCasting();
+        isAudioMode = true;
+        playMedia(data.audioUrl, data.autoplay !== false);
+        showAudioOverlay();
+        statusText.textContent = 'Audio Loading...';
+      }
+
+      if (data.type === 'MEDIA_CONTROL') handleMediaControl(data.command, data.value);
+
+      if (data.type === 'SET_VOLUME') {
+        const v = parseFloat(data.volume);
+        if (!isNaN(v)) mediaPlayer.volume = Math.max(0, Math.min(1, v));
+      }
+    });
+
+    // ── Audio overlay helpers ─────────────────────────────────────────
+    function showAudioOverlay() {
+      audioOverlay.style.display = 'flex';
+      audioDisc.classList.remove('paused');
+      setEqBarsPaused(false);
+      // Try to extract a track name from the audio URL
+      // e.g. "http://...:8080/audio.mp3?t=123" → "Music"
+      audioTrackTitle.textContent = 'Music';
+      console.log('[RECEIVER] Audio overlay shown');
+    }
+
+    function hideAudioOverlay() {
+      audioOverlay.style.display = 'none';
+      isAudioMode = false;
+      console.log('[RECEIVER] Audio overlay hidden');
+    }
+
+    // ── Media playback ────────────────────────────────────────────────
+    var mediaRetryCount = 0;
+    const MAX_MEDIA_RETRIES = 4;
+    let mediaRetryTimer = null;
+
+    function playMedia(url, autoplay) {
+      console.log('[RECEIVER] playMedia called, url=' + url + ' autoplay=' + autoplay);
+      mediaRetryCount = 0;
+      attemptPlayMedia(url, autoplay);
+    }
+
+    function attemptPlayMedia(url, autoplay) {
+      console.log('[RECEIVER] attemptPlayMedia attempt=' + (mediaRetryCount + 1));
+      splash.classList.add('hidden');
+      mediaPlayer.classList.remove('hidden');
+      mediaPlayer.style.display = 'block';
+      videoPlayer.style.display = 'none';
+
+      stopStatusReporting();
+      if (mediaRetryTimer) { clearTimeout(mediaRetryTimer); mediaRetryTimer = null; }
+
+      // Remove old listeners to avoid duplicates
+      mediaPlayer.oncanplay = null;
+      mediaPlayer.onerror = null;
+
+      // Set up success handler
+      mediaPlayer.oncanplay = function () {
+        console.log('[RECEIVER] canplay fired — media ready');
+        mediaPlayer.oncanplay = null; // fire once
+        statusText.textContent = isAudioMode ? 'Playing Music' : 'Playing Video';
+        if (autoplay) {
+          const p = mediaPlayer.play();
+          if (p) p.catch(function (e) {
+            console.log('[RECEIVER] play() rejected: ' + e + ' — trying muted');
+            mediaPlayer.muted = true;
+            mediaPlayer.play().catch(function () { });
+          });
+        } else {
+          mediaPlayer.pause();
+          sendStatus('paused');
+          statusText.textContent = isAudioMode ? 'Music Ready' : 'Video Ready';
+        }
+      };
+
+      // Set up error handler with retry
+      mediaPlayer.onerror = function () {
+        // Ignore errors during intentional stop
+        if (mediaStopping) return;
+        const err = mediaPlayer.error;
+        console.log('[RECEIVER] media error: code=' + (err ? err.code : '?') + ' msg=' + (err ? err.message : '?'));
+        mediaRetryCount++;
+        if (mediaRetryCount <= MAX_MEDIA_RETRIES) {
+          console.log('[RECEIVER] retrying in ' + (mediaRetryCount * 1000) + 'ms (attempt ' + (mediaRetryCount + 1) + ')');
+          statusText.textContent = 'Loading...';
+          mediaRetryTimer = setTimeout(function () {
+            // Append cache-buster to force a fresh request
+            const sep = url.indexOf('?') >= 0 ? '&' : '?';
+            const retryUrl = url + sep + 'retry=' + mediaRetryCount;
+            mediaPlayer.src = retryUrl;
+            mediaPlayer.load();
+          }, mediaRetryCount * 1000);
+        } else {
+          console.log('[RECEIVER] all retries exhausted');
+          // Return to splash instead of showing error
+          returnToSplash();
+        }
+      };
+
+      // Kick off load
+      mediaPlayer.src = url;
+      mediaPlayer.load();
+    }
+
+    function handleMediaControl(command, value) {
+      switch (command) {
+        case 'play':
+          mediaPlayer.play();
+          break;
+        case 'pause':
+          mediaPlayer.pause();
+          break;
+        case 'seek':
+        case 'seekTo':
+          mediaPlayer.currentTime = parseFloat(value) || 0;
+          // Send updated status immediately after seek
+          setTimeout(() => sendStatus(mediaPlayer.paused ? 'paused' : 'playing'), 100);
+          break;
+      }
+    }
+
+    function stopMediaCasting() {
+      mediaStopping = true;
+      stopStatusReporting();
+      // Clear handlers BEFORE clearing src to prevent the retry loop
+      mediaPlayer.oncanplay = null;
+      mediaPlayer.onerror = null;
+      if (mediaRetryTimer) { clearTimeout(mediaRetryTimer); mediaRetryTimer = null; }
+      mediaRetryCount = 0;
+      mediaPlayer.pause();
+      mediaPlayer.removeAttribute('src');
+      mediaPlayer.load();
+      mediaPlayer.classList.add('hidden');
+      mediaPlayer.style.display = 'none';
+      // Reset flag after a tick so future playMedia() calls work
+      setTimeout(() => { mediaStopping = false; }, 100);
+    }
+
+    function stopAllMedia() {
+      stopMediaCasting();
+      stopImageCasting();
+      hideAudioOverlay();
+    }
+
+    // ── Image display ─────────────────────────────────────────────────
+    function showImageBlob(blob) {
+      let url = URL.createObjectURL(blob);
+      imageViewer.onload = () => {
+        URL.revokeObjectURL(url);
+        // Send confirmation to iOS sender that the image is now visible on TV
+        try {
+          context.sendCustomMessage(NAMESPACE, undefined, { type: 'IMAGE_DISPLAYED' });
+        } catch (e) { /* sender may not be connected */ }
+      };
+      imageViewer.src = url;
+      splash.classList.add('hidden');
+      videoPlayer.style.display = 'none';
+      imageViewer.style.display = 'block';
+      imageViewer.classList.remove('hidden');
+      statusText.textContent = 'Showing Image';
+    }
+
+    // ── MJPEG mirroring ───────────────────────────────────────────────
+    var isMirroringActive = false;
+    var mjpegErrorTimer = null;
+    var mjpegRetryTimer = null;
+    var mjpegRetryCount = 0;
+    var currentMjpegUrl = '';
+    const MAX_MJPEG_RETRIES = 3; // retries before exiting to TV home
+
+
+    // Stream stall watchdog: periodically probes the MJPEG server to detect
+    // when the broadcast extension has been killed (user stopped broadcast
+    // outside the app, phone locked, etc.). The <img> onerror may NOT fire
+    // reliably when the server-side TCP connection is closed on a
+    // multipart/x-mixed-replace stream. This watchdog is the safety net.
+    var stallWatchdogTimer = null;
+    var consecutiveProbeFailures = 0;
+    const STALL_PROBE_INTERVAL = 10000; // Check every 10 seconds
+    const MAX_PROBE_FAILURES = 2;       // 2 consecutive failures (~20s) = dead
+
+    function startStallWatchdog() {
+      stopStallWatchdog();
+      consecutiveProbeFailures = 0;
+      stallWatchdogTimer = setInterval(() => {
+        if (!isMirroringActive || !currentMjpegUrl) {
+          stopStallWatchdog();
+          return;
+        }
+        // Build a probe URL from the MJPEG origin. We use mode:'no-cors' so
+        // even opaque 200/404 responses count as "server alive". Only a true
+        // network error (connection refused) increments the failure counter.
+        var probeUrl;
+        try {
+          var u = new URL(currentMjpegUrl);
+          probeUrl = u.origin + '/?_probe=' + Date.now();
+        } catch (e) {
+          return; // malformed URL, skip this cycle
+        }
+        var ctrl = new AbortController();
+        var to = setTimeout(() => ctrl.abort(), 5000);
         fetch(probeUrl, { signal: ctrl.signal, mode: 'no-cors' })
-          .then(() => { clearTimeout(to); probeFailures = 0; })
+          .then(() => { clearTimeout(to); consecutiveProbeFailures = 0; })
           .catch(() => {
             clearTimeout(to);
-            if (++probeFailures >= MAX_PROBE_FAIL) {
-              log('Watchdog: server gone — stopping mirror');
+            consecutiveProbeFailures++;
+            console.log('[RECEIVER] Stall watchdog probe failed (' +
+              consecutiveProbeFailures + '/' + MAX_PROBE_FAILURES + ')');
+            if (consecutiveProbeFailures >= MAX_PROBE_FAILURES) {
+              console.log('[RECEIVER] MJPEG server unreachable — returning to splash');
               stopMirroring();
             }
           });
-      }, PROBE_INTERVAL);
+      }, STALL_PROBE_INTERVAL);
     }
 
-    function stopWatchdog() {
-      if (watchdog) { clearInterval(watchdog); watchdog = null; }
-      probeFailures = 0;
+    function stopStallWatchdog() {
+      if (stallWatchdogTimer) { clearInterval(stallWatchdogTimer); stallWatchdogTimer = null; }
+      consecutiveProbeFailures = 0;
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Helpers
-    // ─────────────────────────────────────────────────────────────────
-    function log(msg) { console.log('[MIRROR] ' + msg); }
-
-    function setStatus(label, dotClass) {
-      statusText.textContent = label;
-      dot.className = 'dot ' + dotClass;
-    }
-
-    function send(obj) {
-      try { ctx.sendCustomMessage(NS, undefined, obj); } catch {}
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Mirroring — start / retry / stop
-    // ─────────────────────────────────────────────────────────────────
     function startMirroring(url) {
-      log('startMirroring: ' + url);
-      stopMirroring();           // clean any previous session first
+      cleanupMirroringConnection();
+      cleanupImageCastingWS();
+      videoPlayer.style.display = 'none';
+      stopAllMedia();
 
-      active       = true;
-      currentUrl   = url;
-      retryCount   = 0;
-
+      mjpegViewer.classList.remove('hidden');
+      mjpegViewer.style.display = 'block';
       splash.classList.add('hidden');
-      mjpeg.style.display = 'block';
-      overlay.style.display = 'flex';
+      statusText.textContent = 'Connecting...';
+      isMirroringActive = true;
+      currentMjpegUrl = url;
+      mjpegRetryCount = 0;
 
-      attachHandlers(url);
-      mjpeg.src = url;
+      setupMjpegHandlers(url);
+      mjpegViewer.src = url;
 
-      startWatchdog();
-      setStatus('Connecting…', 'ready');
+      // Start stall watchdog to detect dead MJPEG server when onerror doesn't fire
+      startStallWatchdog();
     }
 
-    function attachHandlers(url) {
-      mjpeg.onerror = () => {
-        if (!active) return;
-        log('onerror (retry ' + (retryCount + 1) + ')');
-        clearTimeout(errorTimer);
-        errorTimer = setTimeout(retryMirroring, 2000);
+    function setupMjpegHandlers(url) {
+      mjpegViewer.onerror = () => {
+        if (!isMirroringActive) return;
+        console.log('[RECEIVER] MJPEG error - will retry (attempt ' + (mjpegRetryCount + 1) + ')');
+        // Instead of stopping, schedule a retry to reconnect to the MJPEG stream
+        if (mjpegErrorTimer) clearTimeout(mjpegErrorTimer);
+        mjpegErrorTimer = setTimeout(() => {
+          if (isMirroringActive) {
+            retryMjpegConnection();
+          }
+        }, 2000); // Wait 2s before first retry attempt
       };
-
-      mjpeg.onload = () => {
-        // Fires on the first frame delivered
-        clearTimeout(errorTimer);
-        clearTimeout(retryTimer);
-        retryCount = 0;
-        overlayText.textContent = 'Mirroring';
-        setStatus('Mirroring screen', 'streaming');
-        send({ type: 'MIRROR_STARTED' });
+      mjpegViewer.onload = () => {
+        if (mjpegErrorTimer) { clearTimeout(mjpegErrorTimer); mjpegErrorTimer = null; }
+        if (mjpegRetryTimer) { clearTimeout(mjpegRetryTimer); mjpegRetryTimer = null; }
+        mjpegRetryCount = 0;
+        statusText.textContent = 'Mirroring Screen';
       };
     }
 
-    function retryMirroring() {
-      if (!active) return;
-      if (++retryCount > MAX_RETRY) {
-        log('Max retries reached — stopping');
+    function retryMjpegConnection() {
+      if (!isMirroringActive || !currentMjpegUrl) return;
+      mjpegRetryCount++;
+
+      if (mjpegRetryCount > MAX_MJPEG_RETRIES) {
+        console.log('[RECEIVER] MJPEG max retries exhausted - stopping');
         stopMirroring();
         return;
       }
-      const delay = Math.min(5000, retryCount * 1200);
-      log('Retry #' + retryCount + ' in ' + delay + 'ms');
-      overlayText.textContent = 'Reconnecting…';
-      setStatus('Reconnecting…', 'ready');
 
-      retryTimer = setTimeout(() => {
-        if (!active) return;
-        const sep = currentUrl.includes('?') ? '&' : '?';
-        const url  = currentUrl + sep + '_r=' + Date.now();
-        attachHandlers(url);
-        mjpeg.src = url;
+      // Exponential backoff: 2s, 3s, 4s, 5s, then cap at 5s
+      var delay = Math.min(5000, 2000 + (mjpegRetryCount * 1000));
+      console.log('[RECEIVER] MJPEG retry #' + mjpegRetryCount + ' in ' + delay + 'ms');
+      statusText.textContent = 'Reconnecting...';
+
+      mjpegRetryTimer = setTimeout(() => {
+        if (!isMirroringActive) return;
+        // Add cache-buster to force fresh connection
+        var sep = currentMjpegUrl.indexOf('?') >= 0 ? '&' : '?';
+        var retryUrl = currentMjpegUrl + sep + '_r=' + Date.now();
+        console.log('[RECEIVER] MJPEG reconnecting to: ' + retryUrl);
+        setupMjpegHandlers(retryUrl);
+        mjpegViewer.src = retryUrl;
       }, delay);
     }
 
+    function cleanupMirroringConnection() {
+      isMirroringActive = false;
+      currentMjpegUrl = '';
+      mjpegRetryCount = 0;
+      if (mjpegErrorTimer) { clearTimeout(mjpegErrorTimer); mjpegErrorTimer = null; }
+      if (mjpegRetryTimer) { clearTimeout(mjpegRetryTimer); mjpegRetryTimer = null; }
+      stopStallWatchdog();
+      mjpegViewer.onerror = null;
+      mjpegViewer.onload = null;
+      mjpegViewer.src = '';
+      mjpegViewer.classList.add('hidden');
+      mjpegViewer.style.display = 'none';
+    }
+
     function stopMirroring() {
-      log('stopMirroring');
-      active     = false;
-      currentUrl = '';
-      retryCount = 0;
-
-      clearTimeout(errorTimer); errorTimer = null;
-      clearTimeout(retryTimer); retryTimer = null;
-      stopWatchdog();
-
-      mjpeg.onerror = null;
-      mjpeg.onload  = null;
-      mjpeg.src     = '';
-      mjpeg.style.display = 'none';
-      overlay.style.display = 'none';
-
-      returnToSplash();
-    }
-
-    function returnToSplash() {
+      cleanupMirroringConnection();
+      cleanupImageCastingWS();
+      stopAllMedia();
+      videoPlayer.style.display = 'none';
       splash.classList.remove('hidden');
-      deviceName.textContent = 'Waiting for connection…';
-      setStatus('Ready to receive', 'ready');
-      dot.classList.remove('connected', 'streaming', 'error');
-      dot.classList.add('ready');
+      // Show connection-aware status
+      if (senderConnected) {
+        connectionMessage.textContent = 'Connected to ' + connectedDeviceName;
+        statusText.textContent = 'Connected — Ready to cast';
+        statusDot.classList.add('connected');
+      } else {
+        connectionMessage.textContent = 'Waiting for connection...';
+        statusText.textContent = 'Ready to receive';
+        statusDot.classList.remove('connected');
+      }
+      // Stay on the receiver splash — do NOT call context.stop().
+      // The Cast session stays alive so the user can cast something else
+      // without reconnecting.
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Custom message handler (from iOS sender)
-    // ─────────────────────────────────────────────────────────────────
-    ctx.addCustomMessageListener(NS, event => {
-      let d = event.data;
-      if (typeof d === 'string') {
-        try { d = JSON.parse(d); } catch { return; }
-      }
-      log('msg type=' + (d.type || '?'));
+    // ── WebSocket image casting ───────────────────────────────────────
+    let ws = null;
 
-      switch (d.type) {
+    function startImageCastingWS(url) {
+      cleanupImageCastingWS();
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { statusText.textContent = 'Image Casting Active'; };
+      ws.onmessage = (event) => {
+        const data = new Uint8Array(event.data);
+        if (data.length > 2 && data[0] === 0xFF && data[1] === 0xD8) {
+          showImageBlob(new Blob([data], { type: 'image/jpeg' }));
+        }
+      };
+      ws.onerror = () => statusText.textContent = 'Connection Error';
+      ws.onclose = () => statusText.textContent = 'Disconnected';
+    }
 
-        case 'CONNECTION_ESTABLISHED':
-          deviceName.textContent = 'Connected to ' + (d.deviceName || 'iOS Device');
-          setStatus('Connected', 'connected');
-          send({ type: 'RECEIVER_READY' });
-          break;
+    function cleanupImageCastingWS() {
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    }
 
-        case 'START_MIRRORING':
-          if (d.streamUrl) startMirroring(d.streamUrl);
-          break;
+    function stopImageCasting() {
+      imageViewer.classList.add('hidden');
+      imageViewer.style.display = 'none';
+      imageViewer.src = '';
+    }
 
-        case 'STOP_MIRRORING':
-          stopMirroring();
-          break;
-      }
-    });
+    // ── Return to splash (home screen) ────────────────────────────────
+    function returnToSplash() {
+      stopAllMedia();
+      stopImageCasting();
+      cleanupMirroringConnection();
+      cleanupImageCastingWS();
+      hideAudioOverlay();
+      videoPlayer.style.display = 'none';
+      splash.classList.remove('hidden');
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Sender disconnect
-    // ─────────────────────────────────────────────────────────────────
-    ctx.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
-      if (ctx.getSenders().length > 0) return;
-      if (active) {
-        // Broadcast extension may still be alive — reduce retry patience
-        log('Sender gone during active mirror — reducing retries');
-        retryCount = MAX_RETRY;
+      // Show connection-aware status:
+      // If a sender is still connected, show "Connected — Ready to cast"
+      // instead of "Waiting for connection..." which confuses the user.
+      if (senderConnected && context.getSenders().length > 0) {
+        connectionMessage.textContent = 'Connected to ' + connectedDeviceName;
+        statusText.textContent = 'Connected — Ready to cast';
+        statusDot.classList.add('connected');
       } else {
-        returnToSplash();
+        senderConnected = false;
+        connectedDeviceName = '';
+        connectionMessage.textContent = 'Waiting for connection...';
+        statusText.textContent = 'Ready to receive';
+        statusDot.classList.remove('connected');
+      }
+    }
+
+    // ── Sender disconnect handler ─────────────────────────────────────
+
+    // Helper: true if a video or audio is loaded in the media player
+    function isMediaActive() {
+      return mediaPlayer.src && mediaPlayer.src !== '' && !mediaPlayer.classList.contains('hidden');
+    }
+
+    // Helper: true if an image is currently displayed on screen
+    function isImageActive() {
+      return !imageViewer.classList.contains('hidden') && imageViewer.src && imageViewer.src !== '';
+    }
+
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (event) => {
+      const mediaActive = isMediaActive();
+      const imageActive = isImageActive();
+      console.log('[RECEIVER] Sender disconnected. Mirroring: ' + isMirroringActive +
+        ', Media: ' + mediaActive + ', Image: ' + imageActive);
+      if (context.getSenders().length === 0) {
+        if (mediaActive || imageActive) {
+          // Video, audio, or image is actively being cast on the TV.
+          // The Chromecast plays media via its own HTTP fetch — it does NOT need
+          // the sender app to stay connected. Do NOT stop playback or close the
+          // receiver. The user backgrounded the iOS app; media continues on TV.
+          console.log('[RECEIVER] Sender gone but media/image active — keeping playback alive');
+        } else if (isMirroringActive) {
+          // Mirroring is active — the MJPEG stream is served by the broadcast
+          // extension on its own port (8088), completely independent of the Cast
+          // SDK sender connection. The sender disconnects when the app is
+          // backgrounded, but the extension keeps streaming frames.
+          //
+          // However, if the user actually stopped the broadcast, the MJPEG stream
+          // will die shortly. Reduce retry patience so we detect it fast.
+          console.log('[RECEIVER] Sender gone during active mirroring — reducing retry patience');
+          mjpegRetryCount = MAX_MJPEG_RETRIES; // Next onerror will exhaust retries immediately
+        } else {
+          // Nothing active — return to splash and wait for next cast command.
+          // Do NOT call context.stop() — keep the receiver alive so the user
+          // can cast something else without reconnecting.
+          console.log('[RECEIVER] Sender gone, nothing active — returning to splash');
+          senderConnected = false;
+          connectedDeviceName = '';
+          returnToSplash();
+        }
       }
     });
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Start the receiver (never idle out)
-    // ─────────────────────────────────────────────────────────────────
-    const opts = new cast.framework.CastReceiverOptions();
-    opts.disableIdleTimeout = true;
-    opts.maxInactivity = 86400;
-    ctx.start(opts);
+    // Start Cast Receiver
+    const options = new cast.framework.CastReceiverOptions();
+    options.disableIdleTimeout = true;
+    options.maxInactivity = 86400;
+    context.start(options);
   </script>
 </body>
+
 </html>
