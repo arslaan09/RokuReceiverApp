@@ -338,6 +338,7 @@
   <img id="image-viewer" class="hidden"
     style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 6; background: black;">
 
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
   <script>
     const context = cast.framework.CastReceiverContext.getInstance();
     const playerManager = context.getPlayerManager();
@@ -474,6 +475,12 @@
         connectionMessage.textContent = 'Connected to ' + connectedDeviceName;
         statusText.textContent = 'Connected — Ready to cast';
         statusDot.classList.add('connected');
+        // Confirm back to iOS that the receiver is fully loaded and ready.
+        // CastManager observes this to set isReceiverReady = true, which
+        // releases the ConnectingDialog spinner in the app.
+        try {
+          context.sendCustomMessage(NAMESPACE, undefined, { type: 'CONNECTION_CONFIRMED' });
+        } catch (e) { /* sender channel may not be fully registered yet */ }
       }
 
       if (data.type === 'START_MIRRORING') {
@@ -680,99 +687,166 @@
       statusText.textContent = 'Showing Image';
     }
 
-    // ── MJPEG mirroring ───────────────────────────────────────────────
+    // ── Screen Mirroring — HLS (primary) + MJPEG (fallback) ─────────────
+    //
+    // HLS path: Extension produces H.264 fMP4 segments served as a live HLS
+    // playlist. Receiver plays it with HLS.js in a <video> element for smooth
+    // hardware-decoded display (~2-3 s latency, much smoother than MJPEG).
+    //
+    // MJPEG path: Legacy <img> polling, used on iOS <14 or when HLS isn't ready.
+
     var isMirroringActive = false;
+    var isHLSMirroringActive = false;
+    var hlsInstance = null;           // HLS.js instance
+    var hlsRetryTimer = null;
+    var hlsRetryCount = 0;
+    var currentMirrorUrl = '';
+    const MAX_HLS_RETRIES = 5;
+
+    // MJPEG fallback state
     var mjpegErrorTimer = null;
     var mjpegRetryTimer = null;
     var mjpegRetryCount = 0;
     var currentMjpegUrl = '';
-    const MAX_MJPEG_RETRIES = 3; // retries before exiting to TV home
+    const MAX_MJPEG_RETRIES = 3;
 
-
-    // Stream stall watchdog: periodically probes the MJPEG server to detect
-    // when the broadcast extension has been killed (user stopped broadcast
-    // outside the app, phone locked, etc.). The <img> onerror may NOT fire
-    // reliably when the server-side TCP connection is closed on a
-    // multipart/x-mixed-replace stream. This watchdog is the safety net.
+    // Stall watchdog for MJPEG
     var stallWatchdogTimer = null;
     var consecutiveProbeFailures = 0;
-    const STALL_PROBE_INTERVAL = 10000; // Check every 10 seconds
-    const MAX_PROBE_FAILURES = 2;       // 2 consecutive failures (~20s) = dead
-
-    function startStallWatchdog() {
-      stopStallWatchdog();
-      consecutiveProbeFailures = 0;
-      stallWatchdogTimer = setInterval(() => {
-        if (!isMirroringActive || !currentMjpegUrl) {
-          stopStallWatchdog();
-          return;
-        }
-        // Build a probe URL from the MJPEG origin. We use mode:'no-cors' so
-        // even opaque 200/404 responses count as "server alive". Only a true
-        // network error (connection refused) increments the failure counter.
-        var probeUrl;
-        try {
-          var u = new URL(currentMjpegUrl);
-          probeUrl = u.origin + '/?_probe=' + Date.now();
-        } catch (e) {
-          return; // malformed URL, skip this cycle
-        }
-        var ctrl = new AbortController();
-        var to = setTimeout(() => ctrl.abort(), 5000);
-        fetch(probeUrl, { signal: ctrl.signal, mode: 'no-cors' })
-          .then(() => { clearTimeout(to); consecutiveProbeFailures = 0; })
-          .catch(() => {
-            clearTimeout(to);
-            consecutiveProbeFailures++;
-            console.log('[RECEIVER] Stall watchdog probe failed (' +
-              consecutiveProbeFailures + '/' + MAX_PROBE_FAILURES + ')');
-            if (consecutiveProbeFailures >= MAX_PROBE_FAILURES) {
-              console.log('[RECEIVER] MJPEG server unreachable — returning to splash');
-              stopMirroring();
-            }
-          });
-      }, STALL_PROBE_INTERVAL);
-    }
-
-    function stopStallWatchdog() {
-      if (stallWatchdogTimer) { clearInterval(stallWatchdogTimer); stallWatchdogTimer = null; }
-      consecutiveProbeFailures = 0;
-    }
+    const STALL_PROBE_INTERVAL = 10000;
+    const MAX_PROBE_FAILURES = 2;
 
     function startMirroring(url) {
       cleanupMirroringConnection();
       cleanupImageCastingWS();
-      videoPlayer.style.display = 'none';
       stopAllMedia();
-
-      mjpegViewer.classList.remove('hidden');
-      mjpegViewer.style.display = 'block';
       splash.classList.add('hidden');
       statusText.textContent = 'Connecting...';
       isMirroringActive = true;
+      currentMirrorUrl = url;
+
+      if (url.indexOf('/hls/') >= 0) {
+        startHLSMirroring(url);
+      } else {
+        startMJPEGMirroring(url);
+      }
+    }
+
+    // ── HLS Mirroring ───────────────────────────────────────────────────
+
+    function startHLSMirroring(url) {
+      isHLSMirroringActive = true;
+      hlsRetryCount = 0;
+      mjpegViewer.classList.add('hidden');
+      mjpegViewer.style.display = 'none';
+      videoPlayer.style.display = 'block';
+      videoPlayer.muted = true;      // muted so autoplay is allowed
+      videoPlayer.volume = 1.0;
+
+      console.log('[RECEIVER] Starting HLS mirroring: ' + url);
+      loadHLSStream(url);
+    }
+
+    function loadHLSStream(url) {
+      destroyHLSInstance();
+
+      if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+        hlsInstance = new Hls({
+          lowLatencyMode: false,
+          backBufferLength: 0,
+          maxBufferLength: 4,
+          maxMaxBufferLength: 8,
+          liveSyncDurationCount: 2,
+          liveMaxLatencyDurationCount: 5,
+          fragLoadingTimeOut: 8000,
+          manifestLoadingTimeOut: 8000,
+          xhrSetup: function(xhr) {
+            xhr.timeout = 8000;
+          }
+        });
+
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+          console.log('[RECEIVER] HLS manifest parsed — starting playback');
+          statusText.textContent = 'Mirroring Screen';
+          videoPlayer.play().catch(function(e) {
+            console.log('[RECEIVER] HLS autoplay rejected: ' + e);
+          });
+        });
+
+        hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+          if (!isMirroringActive || !isHLSMirroringActive) return;
+          console.log('[RECEIVER] HLS error type=' + data.type + ' fatal=' + data.fatal);
+          if (data.fatal) {
+            hlsRetryCount++;
+            if (hlsRetryCount <= MAX_HLS_RETRIES) {
+              var delay = Math.min(4000, 1000 * hlsRetryCount);
+              console.log('[RECEIVER] HLS fatal error — retry ' + hlsRetryCount + ' in ' + delay + 'ms');
+              statusText.textContent = 'Reconnecting...';
+              hlsRetryTimer = setTimeout(function() {
+                if (isMirroringActive && isHLSMirroringActive) {
+                  loadHLSStream(currentMirrorUrl);
+                }
+              }, delay);
+            } else {
+              console.log('[RECEIVER] HLS max retries exhausted — stopping mirroring');
+              stopMirroring();
+            }
+          }
+        });
+
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(videoPlayer);
+
+      } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS (Safari-based environments)
+        videoPlayer.src = url;
+        videoPlayer.play().catch(function(e) {
+          console.log('[RECEIVER] Native HLS play rejected: ' + e);
+        });
+        statusText.textContent = 'Mirroring Screen';
+      } else {
+        console.log('[RECEIVER] HLS not supported — falling back to MJPEG');
+        isHLSMirroringActive = false;
+        // Try to derive MJPEG URL from HLS URL (same host:port, different path)
+        var fallbackUrl = currentMirrorUrl.replace('/hls/playlist.m3u8', '/mjpeg');
+        startMJPEGMirroring(fallbackUrl);
+      }
+    }
+
+    function destroyHLSInstance() {
+      if (hlsRetryTimer) { clearTimeout(hlsRetryTimer); hlsRetryTimer = null; }
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+      videoPlayer.pause();
+      videoPlayer.removeAttribute('src');
+      videoPlayer.load();
+    }
+
+    // ── MJPEG Mirroring (fallback) ──────────────────────────────────────
+
+    function startMJPEGMirroring(url) {
+      isHLSMirroringActive = false;
       currentMjpegUrl = url;
       mjpegRetryCount = 0;
-
+      videoPlayer.style.display = 'none';
+      mjpegViewer.classList.remove('hidden');
+      mjpegViewer.style.display = 'block';
       setupMjpegHandlers(url);
       mjpegViewer.src = url;
-
-      // Start stall watchdog to detect dead MJPEG server when onerror doesn't fire
       startStallWatchdog();
     }
 
     function setupMjpegHandlers(url) {
-      mjpegViewer.onerror = () => {
+      mjpegViewer.onerror = function() {
         if (!isMirroringActive) return;
-        console.log('[RECEIVER] MJPEG error - will retry (attempt ' + (mjpegRetryCount + 1) + ')');
-        // Instead of stopping, schedule a retry to reconnect to the MJPEG stream
         if (mjpegErrorTimer) clearTimeout(mjpegErrorTimer);
-        mjpegErrorTimer = setTimeout(() => {
-          if (isMirroringActive) {
-            retryMjpegConnection();
-          }
-        }, 2000); // Wait 2s before first retry attempt
+        mjpegErrorTimer = setTimeout(function() {
+          if (isMirroringActive) retryMjpegConnection();
+        }, 2000);
       };
-      mjpegViewer.onload = () => {
+      mjpegViewer.onload = function() {
         if (mjpegErrorTimer) { clearTimeout(mjpegErrorTimer); mjpegErrorTimer = null; }
         if (mjpegRetryTimer) { clearTimeout(mjpegRetryTimer); mjpegRetryTimer = null; }
         mjpegRetryCount = 0;
@@ -783,32 +857,59 @@
     function retryMjpegConnection() {
       if (!isMirroringActive || !currentMjpegUrl) return;
       mjpegRetryCount++;
-
       if (mjpegRetryCount > MAX_MJPEG_RETRIES) {
-        console.log('[RECEIVER] MJPEG max retries exhausted - stopping');
         stopMirroring();
         return;
       }
-
-      // Exponential backoff: 2s, 3s, 4s, 5s, then cap at 5s
-      var delay = Math.min(5000, 2000 + (mjpegRetryCount * 1000));
-      console.log('[RECEIVER] MJPEG retry #' + mjpegRetryCount + ' in ' + delay + 'ms');
+      var delay = Math.min(5000, 2000 + mjpegRetryCount * 1000);
       statusText.textContent = 'Reconnecting...';
-
-      mjpegRetryTimer = setTimeout(() => {
+      mjpegRetryTimer = setTimeout(function() {
         if (!isMirroringActive) return;
-        // Add cache-buster to force fresh connection
         var sep = currentMjpegUrl.indexOf('?') >= 0 ? '&' : '?';
         var retryUrl = currentMjpegUrl + sep + '_r=' + Date.now();
-        console.log('[RECEIVER] MJPEG reconnecting to: ' + retryUrl);
         setupMjpegHandlers(retryUrl);
         mjpegViewer.src = retryUrl;
       }, delay);
     }
 
+    function startStallWatchdog() {
+      stopStallWatchdog();
+      consecutiveProbeFailures = 0;
+      stallWatchdogTimer = setInterval(function() {
+        if (!isMirroringActive || !currentMjpegUrl) { stopStallWatchdog(); return; }
+        var probeUrl;
+        try {
+          var u = new URL(currentMjpegUrl);
+          probeUrl = u.origin + '/?_probe=' + Date.now();
+        } catch (e) { return; }
+        var ctrl = new AbortController();
+        var to = setTimeout(function() { ctrl.abort(); }, 5000);
+        fetch(probeUrl, { signal: ctrl.signal, mode: 'no-cors' })
+          .then(function() { clearTimeout(to); consecutiveProbeFailures = 0; })
+          .catch(function() {
+            clearTimeout(to);
+            consecutiveProbeFailures++;
+            if (consecutiveProbeFailures >= MAX_PROBE_FAILURES) stopMirroring();
+          });
+      }, STALL_PROBE_INTERVAL);
+    }
+
+    function stopStallWatchdog() {
+      if (stallWatchdogTimer) { clearInterval(stallWatchdogTimer); stallWatchdogTimer = null; }
+      consecutiveProbeFailures = 0;
+    }
+
     function cleanupMirroringConnection() {
       isMirroringActive = false;
+      isHLSMirroringActive = false;
+      currentMirrorUrl = '';
       currentMjpegUrl = '';
+
+      // HLS cleanup
+      destroyHLSInstance();
+      videoPlayer.style.display = 'none';
+
+      // MJPEG cleanup
       mjpegRetryCount = 0;
       if (mjpegErrorTimer) { clearTimeout(mjpegErrorTimer); mjpegErrorTimer = null; }
       if (mjpegRetryTimer) { clearTimeout(mjpegRetryTimer); mjpegRetryTimer = null; }
@@ -824,9 +925,7 @@
       cleanupMirroringConnection();
       cleanupImageCastingWS();
       stopAllMedia();
-      videoPlayer.style.display = 'none';
       splash.classList.remove('hidden');
-      // Show connection-aware status
       if (senderConnected) {
         connectionMessage.textContent = 'Connected to ' + connectedDeviceName;
         statusText.textContent = 'Connected — Ready to cast';
@@ -836,9 +935,6 @@
         statusText.textContent = 'Ready to receive';
         statusDot.classList.remove('connected');
       }
-      // Stay on the receiver splash — do NOT call context.stop().
-      // The Cast session stays alive so the user can cast something else
-      // without reconnecting.
     }
 
     // ── WebSocket image casting ───────────────────────────────────────
@@ -920,15 +1016,20 @@
           // receiver. The user backgrounded the iOS app; media continues on TV.
           console.log('[RECEIVER] Sender gone but media/image active — keeping playback alive');
         } else if (isMirroringActive) {
-          // Mirroring is active — the MJPEG stream is served by the broadcast
-          // extension on its own port (8088), completely independent of the Cast
+          // Mirroring is active — the stream (HLS or MJPEG) is served by the
+          // broadcast extension on its own port (8088), independent of the Cast
           // SDK sender connection. The sender disconnects when the app is
           // backgrounded, but the extension keeps streaming frames.
           //
-          // However, if the user actually stopped the broadcast, the MJPEG stream
-          // will die shortly. Reduce retry patience so we detect it fast.
+          // If the user actually stopped the broadcast the stream will die shortly.
+          // For HLS we let the built-in retry logic detect failure naturally.
+          // For MJPEG we exhaust retries so we detect disconnect fast.
           console.log('[RECEIVER] Sender gone during active mirroring — reducing retry patience');
-          mjpegRetryCount = MAX_MJPEG_RETRIES; // Next onerror will exhaust retries immediately
+          if (isHLSMirroringActive) {
+            // HLS retry is self-managed; nothing extra needed here.
+          } else {
+            mjpegRetryCount = MAX_MJPEG_RETRIES; // Next onerror will exhaust retries immediately
+          }
         } else {
           // Nothing active — return to splash and wait for next cast command.
           // Do NOT call context.stop() — keep the receiver alive so the user
