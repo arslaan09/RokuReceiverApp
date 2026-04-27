@@ -754,14 +754,16 @@
         hlsInstance = new Hls({
           lowLatencyMode: false,
           backBufferLength: 0,
-          maxBufferLength: 4,
-          maxMaxBufferLength: 8,
+          maxBufferLength: 6,
+          maxMaxBufferLength: 10,
           liveSyncDurationCount: 2,
           liveMaxLatencyDurationCount: 5,
-          fragLoadingTimeOut: 8000,
-          manifestLoadingTimeOut: 8000,
+          fragLoadingTimeOut: 15000,
+          manifestLoadingTimeOut: 15000,
+          fragLoadingMaxRetryTimeout: 10000,
+          manifestLoadingMaxRetryTimeout: 10000,
           xhrSetup: function(xhr) {
-            xhr.timeout = 8000;
+            xhr.timeout = 15000;
           }
         });
 
