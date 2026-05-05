@@ -560,6 +560,19 @@
     var mediaRetryCount = 0;
     const MAX_MEDIA_RETRIES = 4;
     let mediaRetryTimer = null;
+    var mediaHlsInstance = null;   // hls.js instance for HLS video/IPTV casting
+
+    // Returns true for HLS playlist URLs (IPTV channels, .m3u8 files)
+    function isHLSUrl(url) {
+      return url && (url.indexOf('.m3u8') >= 0 || url.indexOf('/hls/') >= 0);
+    }
+
+    function destroyMediaHLSInstance() {
+      if (mediaHlsInstance) {
+        mediaHlsInstance.destroy();
+        mediaHlsInstance = null;
+      }
+    }
 
     function playMedia(url, autoplay) {
       console.log('[RECEIVER] playMedia called, url=' + url + ' autoplay=' + autoplay);
@@ -577,14 +590,81 @@
       stopStatusReporting();
       if (mediaRetryTimer) { clearTimeout(mediaRetryTimer); mediaRetryTimer = null; }
 
-      // Remove old listeners to avoid duplicates
+      // Remove old listeners and destroy any previous HLS instance
       mediaPlayer.oncanplay = null;
       mediaPlayer.onerror = null;
+      destroyMediaHLSInstance();
 
-      // Set up success handler
+      if (isHLSUrl(url)) {
+        // ── HLS path (IPTV / .m3u8 streams) ─────────────────────────
+        // Chrome's <video> element does not support .m3u8 without MSE.
+        // Use hls.js (already loaded for screen mirroring) to handle it.
+        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+          mediaHlsInstance = new Hls({
+            lowLatencyMode: false,
+            maxBufferLength: 30,
+            maxMaxBufferLength: 60,
+            liveSyncDurationCount: 3,
+            liveMaxLatencyDurationCount: 8,
+            fragLoadingTimeOut: 20000,
+            manifestLoadingTimeOut: 20000,
+            enableWorker: true,
+          });
+
+          mediaHlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
+            console.log('[RECEIVER] HLS media manifest parsed — starting playback');
+            statusText.textContent = isAudioMode ? 'Playing Music' : 'Playing Video';
+            if (autoplay) {
+              var p = mediaPlayer.play();
+              if (p) p.catch(function (e) {
+                console.log('[RECEIVER] HLS play() rejected: ' + e + ' — trying muted');
+                mediaPlayer.muted = true;
+                mediaPlayer.play().catch(function () { });
+              });
+            } else {
+              mediaPlayer.pause();
+              sendStatus('paused');
+              statusText.textContent = isAudioMode ? 'Music Ready' : 'Video Ready';
+            }
+          });
+
+          mediaHlsInstance.on(Hls.Events.ERROR, function (event, data) {
+            if (mediaStopping) return;
+            console.log('[RECEIVER] HLS media error type=' + data.type + ' fatal=' + data.fatal);
+            if (data.fatal) {
+              mediaRetryCount++;
+              if (mediaRetryCount <= MAX_MEDIA_RETRIES) {
+                var delay = Math.min(4000, mediaRetryCount * 1000);
+                console.log('[RECEIVER] HLS fatal error — retry ' + mediaRetryCount + ' in ' + delay + 'ms');
+                statusText.textContent = 'Loading...';
+                mediaRetryTimer = setTimeout(function () {
+                  if (!mediaStopping) attemptPlayMedia(url, autoplay);
+                }, delay);
+              } else {
+                console.log('[RECEIVER] HLS media retries exhausted');
+                returnToSplash();
+              }
+            }
+          });
+
+          mediaHlsInstance.loadSource(url);
+          mediaHlsInstance.attachMedia(mediaPlayer);
+
+        } else if (mediaPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+          // Native HLS fallback (unlikely in Chromecast environment)
+          mediaPlayer.src = url;
+          mediaPlayer.load();
+        } else {
+          console.log('[RECEIVER] HLS not supported — cannot play IPTV stream');
+          returnToSplash();
+        }
+        return;
+      }
+
+      // ── Standard video / audio path (MP4, MP3, etc.) ──────────────
       mediaPlayer.oncanplay = function () {
         console.log('[RECEIVER] canplay fired — media ready');
-        mediaPlayer.oncanplay = null; // fire once
+        mediaPlayer.oncanplay = null;
         statusText.textContent = isAudioMode ? 'Playing Music' : 'Playing Video';
         if (autoplay) {
           const p = mediaPlayer.play();
@@ -600,9 +680,7 @@
         }
       };
 
-      // Set up error handler with retry
       mediaPlayer.onerror = function () {
-        // Ignore errors during intentional stop
         if (mediaStopping) return;
         const err = mediaPlayer.error;
         console.log('[RECEIVER] media error: code=' + (err ? err.code : '?') + ' msg=' + (err ? err.message : '?'));
@@ -611,7 +689,6 @@
           console.log('[RECEIVER] retrying in ' + (mediaRetryCount * 1000) + 'ms (attempt ' + (mediaRetryCount + 1) + ')');
           statusText.textContent = 'Loading...';
           mediaRetryTimer = setTimeout(function () {
-            // Append cache-buster to force a fresh request
             const sep = url.indexOf('?') >= 0 ? '&' : '?';
             const retryUrl = url + sep + 'retry=' + mediaRetryCount;
             mediaPlayer.src = retryUrl;
@@ -619,12 +696,10 @@
           }, mediaRetryCount * 1000);
         } else {
           console.log('[RECEIVER] all retries exhausted');
-          // Return to splash instead of showing error
           returnToSplash();
         }
       };
 
-      // Kick off load
       mediaPlayer.src = url;
       mediaPlayer.load();
     }
@@ -654,6 +729,7 @@
       mediaPlayer.onerror = null;
       if (mediaRetryTimer) { clearTimeout(mediaRetryTimer); mediaRetryTimer = null; }
       mediaRetryCount = 0;
+      destroyMediaHLSInstance();
       mediaPlayer.pause();
       mediaPlayer.removeAttribute('src');
       mediaPlayer.load();
