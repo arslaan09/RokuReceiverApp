@@ -133,6 +133,48 @@
     }
 
     /* ── Audio Playback Overlay ──────────────────────────────────── */
+    /* ── Media Loading Overlay ──────────────────────────────────── */
+    #media-loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9;
+      gap: 24px;
+    }
+
+    .media-spinner {
+      width: 56px;
+      height: 56px;
+      border: 4px solid rgba(255, 255, 255, 0.15);
+      border-top-color: #667eea;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #media-loading-text {
+      font-size: 20px;
+      font-weight: 600;
+      color: white;
+      letter-spacing: 0.5px;
+    }
+
+    #media-loading-subtitle {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.55);
+      margin-top: -16px;
+    }
+
     #audio-overlay {
       position: absolute;
       top: 0;
@@ -338,6 +380,13 @@
   <img id="image-viewer" class="hidden"
     style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 6; background: black;">
 
+  <!-- Loading overlay shown while IPTV / HLS stream is buffering -->
+  <div id="media-loading-overlay" class="hidden">
+    <div class="media-spinner"></div>
+    <div id="media-loading-text">Loading Channel...</div>
+    <div id="media-loading-subtitle">Connecting to live stream</div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
   <script>
     const context = cast.framework.CastReceiverContext.getInstance();
@@ -356,6 +405,19 @@
     const audioDisc = document.getElementById('audioDisc');
     const audioTrackTitle = document.getElementById('audioTrackTitle');
     const audioEqualizer = document.getElementById('audioEqualizer');
+    const mediaLoadingOverlay = document.getElementById('media-loading-overlay');
+    const mediaLoadingText = document.getElementById('media-loading-text');
+    const mediaLoadingSubtitle = document.getElementById('media-loading-subtitle');
+
+    function showMediaLoading(isLive) {
+      mediaLoadingText.textContent = isLive ? 'Loading Channel...' : 'Loading...';
+      mediaLoadingSubtitle.textContent = isLive ? 'Connecting to live stream' : 'Preparing media';
+      mediaLoadingOverlay.classList.remove('hidden');
+    }
+
+    function hideMediaLoading() {
+      mediaLoadingOverlay.classList.add('hidden');
+    }
 
     const NAMESPACE = 'urn:x-cast:com.tvmirror.screenmirror';
 
@@ -406,7 +468,7 @@
     mediaPlayer.addEventListener('playing', () => {
       sendStatus('playing');
       startStatusReporting();
-      // Update audio overlay animation state
+      hideMediaLoading();   // stream started — dismiss loading overlay
       if (isAudioMode) {
         audioDisc.classList.remove('paused');
         setEqBarsPaused(false);
@@ -517,7 +579,8 @@
         stopImageCasting();
         hideAudioOverlay();
         isAudioMode = false;
-        playMedia(data.videoUrl, data.autoplay !== false);  // default autoplay=true
+        showMediaLoading(isHLSUrl(data.videoUrl));
+        playMedia(data.videoUrl, data.autoplay !== false);
         statusText.textContent = 'Video Loading...';
       }
 
@@ -724,6 +787,7 @@
     function stopMediaCasting() {
       mediaStopping = true;
       stopStatusReporting();
+      hideMediaLoading();
       // Clear handlers BEFORE clearing src to prevent the retry loop
       mediaPlayer.oncanplay = null;
       mediaPlayer.onerror = null;
@@ -1050,6 +1114,7 @@
       cleanupMirroringConnection();
       cleanupImageCastingWS();
       hideAudioOverlay();
+      hideMediaLoading();
       videoPlayer.style.display = 'none';
       splash.classList.remove('hidden');
 
