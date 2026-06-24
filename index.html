@@ -25,7 +25,7 @@
       object-fit: contain;
       background: #000;
       opacity: 0;
-      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
       z-index: 1;
     }
     #video.visible { opacity: 1; }
@@ -159,6 +159,35 @@
       line-height: 1.5;
     }
 
+    /* ── Live Badge Overlay ── */
+    #live-badge {
+      position: fixed;
+      top: 30px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(239, 68, 68, 0.9);
+      backdrop-filter: blur(10px);
+      color: #fff;
+      font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      z-index: 3;
+      pointer-events: none;
+      box-shadow: 0 8px 32px rgba(239, 68, 68, 0.3);
+    }
+    #live-badge.visible { opacity: 1; }
+    #live-badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #fff;
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.3; transform: scale(0.8); }
+    }
   </style>
 </head>
 <body>
@@ -190,6 +219,10 @@
     </div>
   </div>
 
+  <div id="live-badge">
+    <span class="dot"></span>LIVE
+  </div>
+
   <!-- Google Cast Web Receiver SDK (CAF v3) -->
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 
@@ -202,6 +235,7 @@
     const logoRing    = document.getElementById('logo-ring');
     const statusTitle = document.getElementById('status-title');
     const statusSub   = document.getElementById('status-sub');
+    const liveBadge   = document.getElementById('live-badge');
 
     // ── State ─────────────────────────────────────────────────────────────
     const NS = 'urn:x-cast:com.bdcast.webrtc';
@@ -209,8 +243,6 @@
     let senderId        = null;
     let remoteDescSet   = false;       // true once setRemoteDescription completes
     let pendingCandidates = [];        // ICE candidates buffered before remote desc
-    let serverBaseUrl   = '';
-    let signalingTimeout = null;
 
     // ── UI helpers ────────────────────────────────────────────────────────
     function setStatus(title, sub) {
@@ -225,6 +257,7 @@
       if (ambient) {
         ambient.style.display = on ? 'none' : 'block';
       }
+      liveBadge.classList.toggle('visible', on);
     }
 
     function setConnected(on) {
@@ -249,13 +282,6 @@
       console.log('[BDcast] received:', msg.type);
 
       switch (msg.type) {
-        case 'connect':
-          console.log('[BDcast] Received connect message with URL:', msg.url);
-          serverBaseUrl = msg.url;
-          cleanup(null, null, true);
-          if (signalingTimeout) { clearTimeout(signalingTimeout); signalingTimeout = null; }
-          startHTTPSignaling();
-          break;
         case 'offer': await handleOffer(msg.sdp);  break;
         case 'ice':   await handleICE(msg);         break;
         case 'stop':
@@ -354,12 +380,12 @@
     }
 
     async function startHTTPSignaling() {
-      console.log('[BDcast] starting HTTP signaling with base:', serverBaseUrl);
+      console.log('[BDcast] starting HTTP signaling...');
       setStatus('Connecting…', 'Establishing WebRTC session');
       setConnected(true);
       
       try {
-        const resOffer = await fetch(serverBaseUrl + '/signaling/offer');
+        const resOffer = await fetch('/signaling/offer');
         if (!resOffer.ok) throw new Error('Failed to fetch offer');
         const offerData = await resOffer.json();
         
@@ -371,7 +397,7 @@
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         
-        const resAnswer = await fetch(serverBaseUrl + '/signaling/answer', {
+        const resAnswer = await fetch('/signaling/answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sdp: pc.localDescription.sdp })
@@ -381,14 +407,14 @@
         pollCandidates();
       } catch (err) {
         console.error('[BDcast] HTTP signaling error:', err);
-        signalingTimeout = setTimeout(startHTTPSignaling, 2000); // retry
+        setTimeout(startHTTPSignaling, 2000); // retry
       }
     }
 
     async function pollCandidates() {
       if (!pc || !remoteDescSet) return;
       try {
-        const res = await fetch(serverBaseUrl + '/signaling/ice-candidates');
+        const res = await fetch('/signaling/ice-candidates');
         if (res.ok) {
           const candidates = await res.json();
           for (const c of candidates) {
@@ -418,24 +444,6 @@
       }
       if (title !== null) setStatus(title, sub);
     }
-
-    // Smooth orientation resize transition
-    video.addEventListener('resize', () => {
-      console.log('[BDcast] Video resized to:', video.videoWidth, 'x', video.videoHeight);
-      
-      // Temporarily scale down and fade slightly
-      video.style.transition = 'none';
-      video.style.transform = 'scale(0.92)';
-      video.style.opacity = '0.7';
-      
-      // Force layout recalculation
-      void video.offsetHeight;
-      
-      // Animate back to full size and opacity smoothly
-      video.style.transition = 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1)';
-      video.style.transform = 'scale(1)';
-      video.style.opacity = '1';
-    });
 
     // Start signaling automatically on load
     window.addEventListener('DOMContentLoaded', () => {
