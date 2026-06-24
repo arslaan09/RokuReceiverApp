@@ -116,8 +116,8 @@
         <path d="M2 10h20"/>
       </svg>
     </div>
-    <div id="status-title">Waiting for connection…</div>
-    <div id="status-sub">Open BDcast on your iPhone</div>
+    <div id="status-title">Waiting for BDcast…</div>
+    <div id="status-sub">Open BDcast on your iPhone and connect to this TV</div>
   </div>
 
   <div id="live-badge">
@@ -177,7 +177,7 @@
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
         setConnected(true);
-        setStatus('Sender connected', 'Ready to receive screen…');
+        setStatus('BDcast Connected ✓', 'Tap "Start Mirroring" in the app');
       }
     );
 
@@ -185,7 +185,7 @@
       cast.framework.system.EventType.SENDER_DISCONNECTED,
       () => {
         setConnected(false);
-        cleanup('Waiting for connection…', 'Open BDcast on your iPhone');
+        cleanup('Waiting for BDcast…', 'Open BDcast on your iPhone and connect to this TV');
       }
     );
 
