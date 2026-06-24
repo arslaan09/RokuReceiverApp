@@ -175,8 +175,8 @@
     <div class="glow-blob blob2"></div>
   </div>
 
-  <!-- No 'muted': Cast Web Receiver allows unmuted autoplay; iOS controls audio via track.isEnabled -->
-  <video id="video" autoplay playsinline></video>
+  <!-- Start muted to ensure Chromium autoplay succeeds; iOS controls audio via track.isEnabled -->
+  <video id="video" autoplay playsinline muted></video>
 
   <!-- Standard Cast Media Player -->
   <cast-media-player></cast-media-player>
@@ -332,7 +332,11 @@
         if (video.srcObject !== stream) {
           video.srcObject = stream;
           video.volume = 1;
-          video.play().catch(e => console.warn('[BDcast] play():', e));
+          video.play().catch(e => {
+            console.warn('[BDcast] play() failed, retrying muted:', e);
+            video.muted = true;
+            video.play().catch(e2 => console.error('[BDcast] play(muted) failed:', e2));
+          });
         }
         showStream(true);
         setStatus('Mirroring active');
