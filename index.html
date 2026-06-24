@@ -325,6 +325,9 @@
       const conn = new RTCPeerConnection(cfg);
 
       conn.ontrack = (event) => {
+        if (event.receiver) {
+          event.receiver.playoutDelayHint = 0;
+        }
         let stream = event.streams[0];
         if (!stream && event.track) {
           stream = new MediaStream([event.track]);
@@ -357,9 +360,15 @@
             setStatus('Stream connected', 'Receiving screen');
             break;
           case 'disconnected':
+            setStatus('Connecting…', 'Network connection weak, trying to reconnect');
+            break;
           case 'failed':
-            cleanup('Connection lost', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
-            setConnected(true);
+            setTimeout(() => {
+              if (conn && conn.iceConnectionState === 'failed') {
+                cleanup('Connection lost', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
+                setConnected(true);
+              }
+            }, 10000); // 10 second grace period to allow automatic ice restart
             break;
           case 'closed':
             cleanup('Disconnected', 'Please connect from your iOS device');
