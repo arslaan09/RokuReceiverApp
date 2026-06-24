@@ -209,6 +209,8 @@
     let senderId        = null;
     let remoteDescSet   = false;       // true once setRemoteDescription completes
     let pendingCandidates = [];        // ICE candidates buffered before remote desc
+    let serverBaseUrl   = '';
+    let signalingTimeout = null;
 
     // ── UI helpers ────────────────────────────────────────────────────────
     function setStatus(title, sub) {
@@ -247,6 +249,13 @@
       console.log('[BDcast] received:', msg.type);
 
       switch (msg.type) {
+        case 'connect':
+          console.log('[BDcast] Received connect message with URL:', msg.url);
+          serverBaseUrl = msg.url;
+          cleanup(null, null, true);
+          if (signalingTimeout) { clearTimeout(signalingTimeout); signalingTimeout = null; }
+          startHTTPSignaling();
+          break;
         case 'offer': await handleOffer(msg.sdp);  break;
         case 'ice':   await handleICE(msg);         break;
         case 'stop':
@@ -345,12 +354,12 @@
     }
 
     async function startHTTPSignaling() {
-      console.log('[BDcast] starting HTTP signaling...');
+      console.log('[BDcast] starting HTTP signaling with base:', serverBaseUrl);
       setStatus('Connecting…', 'Establishing WebRTC session');
       setConnected(true);
       
       try {
-        const resOffer = await fetch('/signaling/offer');
+        const resOffer = await fetch(serverBaseUrl + '/signaling/offer');
         if (!resOffer.ok) throw new Error('Failed to fetch offer');
         const offerData = await resOffer.json();
         
@@ -362,7 +371,7 @@
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         
-        const resAnswer = await fetch('/signaling/answer', {
+        const resAnswer = await fetch(serverBaseUrl + '/signaling/answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sdp: pc.localDescription.sdp })
@@ -372,14 +381,14 @@
         pollCandidates();
       } catch (err) {
         console.error('[BDcast] HTTP signaling error:', err);
-        setTimeout(startHTTPSignaling, 2000); // retry
+        signalingTimeout = setTimeout(startHTTPSignaling, 2000); // retry
       }
     }
 
     async function pollCandidates() {
       if (!pc || !remoteDescSet) return;
       try {
-        const res = await fetch('/signaling/ice-candidates');
+        const res = await fetch(serverBaseUrl + '/signaling/ice-candidates');
         if (res.ok) {
           const candidates = await res.json();
           for (const c of candidates) {
