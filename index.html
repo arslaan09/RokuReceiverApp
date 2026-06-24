@@ -116,8 +116,8 @@
         <path d="M2 10h20"/>
       </svg>
     </div>
-    <div id="status-title">Waiting for BDcast…</div>
-    <div id="status-sub">Open BDcast on your iPhone and connect to this TV</div>
+    <div id="status-title">Connecting...</div>
+    <div id="status-sub">Connecting to your iOS device...</div>
   </div>
 
   <div id="live-badge">
@@ -169,7 +169,10 @@
       switch (msg.type) {
         case 'offer': await handleOffer(msg.sdp);  break;
         case 'ice':   await handleICE(msg);         break;
-        case 'stop':  cleanup('Waiting for connection…', 'Open BDcast on your iPhone'); break;
+        case 'stop':  
+          cleanup('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone'); 
+          setConnected(true);
+          break;
       }
     });
 
@@ -177,7 +180,7 @@
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
         setConnected(true);
-        setStatus('BDcast Connected ✓', 'Tap "Start Mirroring" in the app');
+        setStatus('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
       }
     );
 
@@ -185,7 +188,7 @@
       cast.framework.system.EventType.SENDER_DISCONNECTED,
       () => {
         setConnected(false);
-        cleanup('Waiting for BDcast…', 'Open BDcast on your iPhone and connect to this TV');
+        cleanup('Disconnected', 'Please connect from your iOS device');
       }
     );
 
