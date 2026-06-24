@@ -17,7 +17,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Video ── */
+    /* ── WebRTC mirror video ── */
     #video {
       position: fixed;
       inset: 0;
@@ -29,6 +29,44 @@
       z-index: 1;
     }
     #video.visible { opacity: 1; }
+
+    /* ── Cast media elements (above WebRTC) ── */
+    #mediaVideo, #mediaImage {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      background: #000;
+      z-index: 3;
+      display: none;
+    }
+    #mediaAudioOverlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      background: #030508;
+      z-index: 3;
+    }
+    #mediaAudioTitle {
+      font-size: 28px;
+      font-weight: 600;
+      color: #fff;
+      text-align: center;
+      padding: 0 48px;
+      letter-spacing: -0.5px;
+    }
+    .audio-icon-ring {
+      width: 140px; height: 140px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.12);
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.04);
+    }
+    .audio-icon-ring svg { width: 56px; height: 56px; stroke: rgba(255,255,255,0.45); fill: none; }
 
     /* ── Ambient Background Glows ── */
     .ambient-bg {
@@ -168,6 +206,19 @@
 
   <!-- No 'muted': Cast Web Receiver allows unmuted autoplay; iOS controls audio via track.isEnabled -->
   <video id="video" autoplay playsinline></video>
+
+  <!-- Cast media elements (image / video / audio) -->
+  <video id="mediaVideo" autoplay playsinline></video>
+  <img   id="mediaImage" alt="">
+  <div   id="mediaAudioOverlay">
+    <div class="audio-icon-ring">
+      <svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 18V5l12-2v13"/>
+        <circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+      </svg>
+    </div>
+    <div id="mediaAudioTitle">Audio</div>
+  </div>
 
   <div id="overlay">
     <div class="glass-card">
@@ -410,6 +461,111 @@
         setConnected(false);
       }
       if (title !== null) setStatus(title, sub);
+    }
+
+    // ── Media Casting (urn:x-cast:com.bdcast.media) ───────────────────────
+    const MEDIA_NS = 'urn:x-cast:com.bdcast.media';
+    let mediaSenderId    = null;
+    let mediaStatusTimer = null;
+
+    const mediaVideo        = document.getElementById('mediaVideo');
+    const mediaImage        = document.getElementById('mediaImage');
+    const mediaAudioOverlay = document.getElementById('mediaAudioOverlay');
+    const mediaAudioTitle   = document.getElementById('mediaAudioTitle');
+    // Hidden audio element for cast audio (reuse mediaVideo's audio or create a separate one)
+    const mediaAudio        = new Audio();
+
+    context.addCustomMessageListener(MEDIA_NS, (event) => {
+      mediaSenderId = event.senderId;
+      let msg;
+      try { msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch (e) { return; }
+
+      switch (msg.type) {
+        case 'loadMedia':    handleLoadMedia(msg);    break;
+        case 'mediaControl': handleMediaControl(msg); break;
+      }
+    });
+
+    function handleLoadMedia(msg) {
+      stopMediaStatusReporting();
+      hideAllMedia();
+
+      const { url, mediaType, title } = msg;
+
+      if (mediaType === 'video') {
+        mediaVideo.src = url;
+        mediaVideo.style.display = 'block';
+        mediaVideo.load();
+        mediaVideo.play().catch(e => console.warn('[Media] video play:', e));
+        startMediaStatusReporting(mediaVideo, 'video');
+      } else if (mediaType === 'audio') {
+        mediaAudioTitle.textContent = title || 'Audio';
+        mediaAudioOverlay.style.display = 'flex';
+        mediaAudio.src = url;
+        mediaAudio.load();
+        mediaAudio.play().catch(e => console.warn('[Media] audio play:', e));
+        startMediaStatusReporting(mediaAudio, 'audio');
+      } else if (mediaType === 'image') {
+        mediaImage.src = url;
+        mediaImage.style.display = 'block';
+        sendMediaStatus('image', 'playing', 0, 0);
+      }
+    }
+
+    function handleMediaControl(msg) {
+      const isVideo = mediaVideo.style.display !== 'none';
+      const active  = isVideo ? mediaVideo : mediaAudio;
+
+      switch (msg.action) {
+        case 'play':
+          active.play().catch(() => {});
+          break;
+        case 'pause':
+          active.pause();
+          break;
+        case 'seek':
+          if (typeof msg.position === 'number') active.currentTime = msg.position;
+          break;
+        case 'stop':
+          active.pause();
+          active.src = '';
+          hideAllMedia();
+          stopMediaStatusReporting();
+          break;
+      }
+    }
+
+    function startMediaStatusReporting(el, mediaType) {
+      el.addEventListener('ended', function onEnded() {
+        el.removeEventListener('ended', onEnded);
+        stopMediaStatusReporting();
+        sendMediaStatus(mediaType, 'ended', el.currentTime || 0, el.duration || 0);
+      });
+      mediaStatusTimer = setInterval(() => {
+        if (!mediaSenderId) return;
+        const state = el.paused ? 'paused' : 'playing';
+        sendMediaStatus(mediaType, state, el.currentTime || 0, isNaN(el.duration) ? 0 : el.duration);
+      }, 500);
+    }
+
+    function stopMediaStatusReporting() {
+      if (mediaStatusTimer) { clearInterval(mediaStatusTimer); mediaStatusTimer = null; }
+    }
+
+    function sendMediaStatus(mediaType, state, currentTime, duration) {
+      if (!mediaSenderId) return;
+      try {
+        context.sendCustomMessage(MEDIA_NS, mediaSenderId, {
+          type: 'mediaStatus', state, currentTime, duration, mediaType
+        });
+      } catch (e) {}
+    }
+
+    function hideAllMedia() {
+      mediaVideo.pause(); mediaVideo.src = ''; mediaVideo.style.display = 'none';
+      mediaAudio.pause(); mediaAudio.src = '';
+      mediaImage.src = ''; mediaImage.style.display = 'none';
+      mediaAudioOverlay.style.display = 'none';
     }
   </script>
 </body>
