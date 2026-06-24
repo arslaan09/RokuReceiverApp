@@ -249,7 +249,11 @@
 
     function showStream(on) {
       video.classList.toggle('visible', on);
-      overlay.classList.toggle('hidden', on);
+      overlay.style.display = on ? 'none' : 'flex';
+      const ambient = document.querySelector('.ambient-bg');
+      if (ambient) {
+        ambient.style.display = on ? 'none' : 'block';
+      }
       liveBadge.classList.toggle('visible', on);
     }
 
