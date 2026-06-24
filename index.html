@@ -198,7 +198,8 @@
     <div class="glow-blob blob2"></div>
   </div>
 
-  <video id="video" autoplay playsinline muted></video>
+  <!-- No 'muted': Cast Web Receiver allows unmuted autoplay; iOS sender controls audio track isEnabled -->
+  <video id="video" autoplay playsinline></video>
 
   <div id="overlay">
     <div class="glass-card">
@@ -329,7 +330,11 @@
           stream = new MediaStream([event.track]);
         }
         if (!stream) return;
-        if (video.srcObject !== stream) video.srcObject = stream;
+        if (video.srcObject !== stream) {
+          video.srcObject = stream;
+          video.volume = 1;
+          video.play().catch(e => console.warn('[BDcast] play():', e));
+        }
         showStream(true);
         setStatus('Mirroring active');
       };
