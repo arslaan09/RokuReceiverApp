@@ -1,151 +1,434 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BDcast Receiver</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #000; width: 100vw; height: 100vh; overflow: hidden; }
-    #video { width: 100%; height: 100%; object-fit: contain; }
-    #status {
-      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.6); color: #fff; font: 16px/1 sans-serif;
-      padding: 8px 20px; border-radius: 20px; pointer-events: none;
-      transition: opacity 0.5s;
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #03050c;
+      overflow: hidden;
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Video ── */
+    #video {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      background: #000;
+      opacity: 0;
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 1;
+    }
+    #video.visible { opacity: 1; }
+
+    /* ── Ambient Background Glows ── */
+    .ambient-bg {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      z-index: 0;
+      background: #060913;
+    }
+    .glow-blob {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.15;
+      mix-blend-mode: screen;
+      animation: float 20s infinite alternate ease-in-out;
+    }
+    .blob1 {
+      top: -10%; left: -10%;
+      width: 50vw; height: 50vw;
+      background: radial-gradient(circle, #3b82f6 0%, transparent 70%);
+    }
+    .blob2 {
+      bottom: -10%; right: -10%;
+      width: 60vw; height: 60vw;
+      background: radial-gradient(circle, #8b5cf6 0%, transparent 70%);
+      animation-delay: -5s;
+    }
+    @keyframes float {
+      0%   { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(8%, 5%) scale(1.15); }
+    }
+
+    /* ── Modern Status Card Overlay ── */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: none;
+    }
+    #overlay.hidden { opacity: 0; }
+
+    .glass-card {
+      background: rgba(10, 15, 30, 0.45);
+      backdrop-filter: blur(30px);
+      -webkit-backdrop-filter: blur(30px);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      padding: 48px 64px;
+      border-radius: 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4),
+                  inset 0 1px 1px rgba(255, 255, 255, 0.1);
+      max-width: 90%;
+      width: 540px;
+      text-align: center;
+    }
+
+    /* ── Logo Ring with Glowing Indicators ── */
+    .logo-ring {
+      width: 100px; height: 100px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.08);
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      background: rgba(255, 255, 255, 0.02);
+      transition: all 0.5s ease;
+    }
+    .logo-ring svg { 
+      width: 44px; height: 44px; 
+      stroke: rgba(255, 255, 255, 0.7); 
+      transition: all 0.5s ease;
+    }
+
+    /* Spinning/pulsing animation ring */
+    .logo-ring::before {
+      content: "";
+      position: absolute;
+      inset: -5px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      border-top-color: #3b82f6;
+      animation: spin 1.8s linear infinite;
+      box-shadow: 0 0 15px rgba(59, 130, 246, 0.15);
+      transition: all 0.5s ease;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Connected state updates */
+    .logo-ring.connected {
+      border-color: rgba(34, 197, 94, 0.2);
+      background: rgba(34, 197, 94, 0.05);
+      box-shadow: 0 0 35px rgba(34, 197, 94, 0.25);
+    }
+    .logo-ring.connected svg {
+      stroke: #22c55e;
+      filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.5));
+    }
+    .logo-ring.connected::before { 
+      border-top-color: #22c55e; 
+      animation: pulse-ring 2s infinite ease-in-out;
+      box-shadow: 0 0 25px rgba(34, 197, 94, 0.3);
+    }
+    @keyframes pulse-ring {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50%      { transform: scale(1.04); opacity: 1; }
+    }
+
+    /* ── Typography ── */
+    #status-title {
+      font-size: 26px;
+      font-weight: 600;
+      color: #ffffff;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+    }
+    #status-sub {
+      font-size: 15px;
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.5);
+      line-height: 1.5;
+    }
+
+    /* ── Live Badge Overlay ── */
+    #live-badge {
+      position: fixed;
+      top: 30px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(239, 68, 68, 0.9);
+      backdrop-filter: blur(10px);
+      color: #fff;
+      font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      z-index: 3;
+      pointer-events: none;
+      box-shadow: 0 8px 32px rgba(239, 68, 68, 0.3);
+    }
+    #live-badge.visible { opacity: 1; }
+    #live-badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #fff;
+      animation: pulse-dot 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.3; transform: scale(0.8); }
     }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline muted></video>
-  <div id="status">Connected. Ready to mirror.</div>
 
-  <!-- Google Cast Receiver SDK (CAF v3) -->
+  <!-- Ambient Glowing Blobs -->
+  <div class="ambient-bg">
+    <div class="glow-blob blob1"></div>
+    <div class="glow-blob blob2"></div>
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+
+  <div id="overlay">
+    <div class="glass-card">
+      <div class="logo-ring" id="logo-ring">
+        <!-- Cast / TV icon -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <path d="M8 21h8M12 17v4"/>
+          <path d="M2 10h20"/>
+        </svg>
+      </div>
+      <div>
+        <div id="status-title">Waiting for BDcast…</div>
+        <div id="status-sub">Open BDcast on your iPhone and connect to this TV</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="live-badge">
+    <span class="dot"></span>LIVE
+  </div>
+
+  <!-- Google Cast Web Receiver SDK (CAF v3) -->
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 
   <script>
     'use strict';
 
-    const NS    = 'urn:x-cast:com.bdcast.webrtc';
-    const video = document.getElementById('video');
-    const status = document.getElementById('status');
+    // ── DOM refs ──────────────────────────────────────────────────────────
+    const video       = document.getElementById('video');
+    const overlay     = document.getElementById('overlay');
+    const logoRing    = document.getElementById('logo-ring');
+    const statusTitle = document.getElementById('status-title');
+    const statusSub   = document.getElementById('status-sub');
+    const liveBadge   = document.getElementById('live-badge');
 
-    let pc = null;
-    let senderId = null;
+    // ── State ─────────────────────────────────────────────────────────────
+    const NS = 'urn:x-cast:com.bdcast.webrtc';
+    let pc              = null;
+    let senderId        = null;
+    let remoteDescSet   = false;       // true once setRemoteDescription completes
+    let pendingCandidates = [];        // ICE candidates buffered before remote desc
 
-    // ── Cast Receiver setup ─────────────────────────────────────────────────
+    // ── UI helpers ────────────────────────────────────────────────────────
+    function setStatus(title, sub) {
+      statusTitle.textContent = title;
+      statusSub.textContent   = sub || '';
+    }
+
+    function showStream(on) {
+      video.classList.toggle('visible', on);
+      overlay.style.display = on ? 'none' : 'flex';
+      const ambient = document.querySelector('.ambient-bg');
+      if (ambient) {
+        ambient.style.display = on ? 'none' : 'block';
+      }
+      liveBadge.classList.toggle('visible', on);
+    }
+
+    function setConnected(on) {
+      logoRing.classList.toggle('connected', on);
+    }
+
+    // ── Cast Receiver setup ───────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
 
     context.addCustomMessageListener(NS, async (event) => {
       senderId = event.senderId;
-      const msg = event.data;
+
+      // event.data is a raw JSON string when the iOS sender uses sendTextMessage()
+      let msg;
+      try {
+        msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      } catch (e) {
+        console.error('[BDcast] Failed to parse message:', event.data, e);
+        return;
+      }
+
+      console.log('[BDcast] received:', msg.type);
 
       switch (msg.type) {
-        case 'offer':  await handleOffer(msg.sdp);  break;
-        case 'ice':    await handleRemoteICE(msg);  break;
-        case 'stop':   
-          cleanup();
-          setStatus('Connected. Ready to mirror.');
+        case 'offer': await handleOffer(msg.sdp);  break;
+        case 'ice':   await handleICE(msg);         break;
+        case 'stop':
+          cleanup('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
+          setConnected(true);
           break;
+        default:
+          console.warn('[BDcast] unknown message type:', msg.type);
       }
     });
 
     context.addEventListener(
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
-        setStatus('Connected. Ready to mirror.');
+        setConnected(true);
+        setStatus('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
       }
     );
 
     context.addEventListener(
       cast.framework.system.EventType.SENDER_DISCONNECTED,
       () => {
-        cleanup();
-        setStatus('Disconnected');
+        setConnected(false);
+        cleanup('Disconnected', 'Please connect from your iOS device');
       }
     );
 
     context.start({
       touchScreenOptimizedApp: false,
-      maxInactivity: 0          // keep alive as long as sender is connected
+      maxInactivity: 3600        // keep alive for up to 1 h of sender inactivity
     });
 
-    // ── WebRTC ──────────────────────────────────────────────────────────────
-
-    function createPC() {
-      const config = {
+    // ── WebRTC ────────────────────────────────────────────────────────────
+    function buildPeerConnection() {
+      const cfg = {
         iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
+          { urls: 'stun:stun.l.google.com:19302'  },
+          { urls: 'stun:stun1.l.google.com:19302' },
         ]
       };
-      const p = new RTCPeerConnection(config);
+      const conn = new RTCPeerConnection(cfg);
 
-      p.ontrack = (e) => {
-        setStatus('Receiving stream…');
-        let stream = e.streams[0];
-        if (!stream && e.track) {
-          stream = new MediaStream([e.track]);
+      conn.ontrack = (event) => {
+        let stream = event.streams[0];
+        if (!stream && event.track) {
+          stream = new MediaStream([event.track]);
         }
         if (!stream) return;
-        if (video.srcObject !== stream) {
-          video.srcObject = stream;
-        }
+        if (video.srcObject !== stream) video.srcObject = stream;
+        showStream(true);
+        setStatus('Mirroring active');
       };
 
-      p.onicecandidate = (e) => {
-        if (!e.candidate || !senderId) return;
+      conn.onicecandidate = ({ candidate }) => {
+        if (!candidate || !senderId) return;
         context.sendCustomMessage(NS, senderId, {
-          type:         'ice',
-          sdpMid:       e.candidate.sdpMid,
-          sdpMLineIndex: e.candidate.sdpMLineIndex,
-          candidate:    e.candidate.candidate
+          type:          'ice',
+          sdpMid:        candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
+          candidate:     candidate.candidate,
         });
       };
 
-      p.oniceconnectionstatechange = () => {
-        setStatus('ICE: ' + p.iceConnectionState);
-        if (p.iceConnectionState === 'failed' || p.iceConnectionState === 'disconnected') {
-          cleanup();
-          setStatus('Connected. Ready to mirror.');
+      conn.oniceconnectionstatechange = () => {
+        console.log('[WebRTC] ICE state:', conn.iceConnectionState);
+        switch (conn.iceConnectionState) {
+          case 'connected':
+          case 'completed':
+            setStatus('Stream connected', 'Receiving screen');
+            break;
+          case 'disconnected':
+          case 'failed':
+            cleanup('Connection lost', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
+            setConnected(true);
+            break;
+          case 'closed':
+            cleanup('Disconnected', 'Please connect from your iOS device');
+            break;
         }
       };
 
-      return p;
+      return conn;
     }
 
     async function handleOffer(sdpStr) {
-      cleanup();
-      pc = createPC();
-      setStatus('Connecting…');
+      // Reset state and tear down any previous peer connection
+      remoteDescSet    = false;
+      pendingCandidates = [];
+      cleanup(null, null, /* keepOverlay */ true);
+      setStatus('Connecting…', 'Establishing WebRTC session');
+      setConnected(true);
 
-      await pc.setRemoteDescription({ type: 'offer', sdp: sdpStr });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+      pc = buildPeerConnection();
 
-      context.sendCustomMessage(NS, senderId, {
-        type: 'answer',
-        sdp:  pc.localDescription.sdp
-      });
-    }
-
-    async function handleRemoteICE(msg) {
-      if (!pc) return;
       try {
-        await pc.addIceCandidate({
-          candidate:    msg.candidate,
-          sdpMid:       msg.sdpMid,
-          sdpMLineIndex: msg.sdpMLineIndex
+        await pc.setRemoteDescription({ type: 'offer', sdp: sdpStr });
+        remoteDescSet = true;
+        console.log('[BDcast] remote description set, flushing', pendingCandidates.length, 'buffered ICE candidates');
+
+        // Flush any ICE candidates that arrived before setRemoteDescription
+        for (const c of pendingCandidates) {
+          try { await pc.addIceCandidate(c); } catch (_) {}
+        }
+        pendingCandidates = [];
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log('[BDcast] answer created, sending back to iOS');
+
+        context.sendCustomMessage(NS, senderId, {
+          type: 'answer',
+          sdp:  pc.localDescription.sdp,
         });
-      } catch (e) { console.warn('[ICE]', e); }
+      } catch (err) {
+        console.error('[BDcast] offer handling error:', err);
+        cleanup('Connection failed', err.message);
+        setConnected(true);
+      }
     }
 
-    function cleanup() {
+    async function handleICE(msg) {
+      const candidate = {
+        candidate:     msg.candidate,
+        sdpMid:        msg.sdpMid,
+        sdpMLineIndex: msg.sdpMLineIndex,
+      };
+
+      if (!pc || !remoteDescSet) {
+        // Buffer until remote description is set
+        pendingCandidates.push(candidate);
+        return;
+      }
+
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (e) {
+        console.warn('[BDcast] addIceCandidate error (benign):', e.message);
+      }
+    }
+
+    function cleanup(title, sub, keepOverlay = false) {
       if (pc) { pc.close(); pc = null; }
-      video.srcObject = null;
-    }
-
-    function setStatus(text) {
-      status.textContent = text;
+      remoteDescSet    = false;
+      pendingCandidates = [];
+      video.srcObject  = null;
+      showStream(false);
+      setConnected(false);
+      if (title !== null) setStatus(title, sub);
     }
   </script>
 </body>
