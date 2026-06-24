@@ -223,12 +223,19 @@
       logoRing.classList.toggle('connected', on);
     }
 
-    // Adapt object-fit when stream orientation changes:
-    // landscape frames → cover (fills TV), portrait frames → contain (phone shape)
-    video.addEventListener('resize', () => {
+    // Adapt object-fit to stream orientation.
+    // Use both the resize event AND a 300 ms poll — Cast Web Receiver's Chromium
+    // does not always fire resize reliably when WebRTC changes frame dimensions.
+    function updateObjectFit() {
       if (!video.videoWidth || !video.videoHeight) return;
-      video.style.objectFit = video.videoWidth > video.videoHeight ? 'cover' : 'contain';
-    });
+      const shouldCover = video.videoWidth > video.videoHeight;
+      const isCover     = video.style.objectFit === 'cover';
+      if (shouldCover !== isCover) {
+        video.style.objectFit = shouldCover ? 'cover' : 'contain';
+      }
+    }
+    video.addEventListener('resize', updateObjectFit);
+    setInterval(updateObjectFit, 300);
 
     // ── Cast Receiver setup ───────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
