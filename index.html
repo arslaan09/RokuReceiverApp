@@ -256,77 +256,93 @@
     const playerManager = context.getPlayerManager();
 
     function updateUIForMediaState() {
-      const player = document.querySelector('cast-media-player');
-      if (!player) return;
+      try {
+        const player = document.querySelector('cast-media-player');
+        if (!player) return;
 
-      const mediaInfo = playerManager.getMediaInformation();
-      const playerState = playerManager.getPlayerState();
+        const mediaInfo = playerManager ? playerManager.getMediaInformation() : null;
+        const playerState = playerManager ? playerManager.getPlayerState() : null;
 
-      const hasMedia = !!(mediaInfo && mediaInfo.contentId);
-      const isImage = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
-      const isIdle = playerState === cast.framework.messages.PlayerState.IDLE;
+        const hasMedia = !!(mediaInfo && mediaInfo.contentId);
+        const isImage = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
+        const isIdle = !playerState || playerState === 'IDLE';
 
-      // Determine if media player should be active
-      let isMediaActive = false;
-      if (hasMedia) {
-        if (isImage) {
-          isMediaActive = true;
-        } else {
-          isMediaActive = !isIdle;
+        // Determine if media player should be active
+        let isMediaActive = false;
+        if (hasMedia) {
+          if (isImage) {
+            isMediaActive = true;
+          } else {
+            isMediaActive = !isIdle;
+          }
         }
-      }
 
-      console.log('[BDcast] updateUI: hasMedia=', hasMedia, 'isImage=', isImage, 'playerState=', playerState, 'isMediaActive=', isMediaActive);
+        console.log('[BDcast] updateUI: hasMedia=', hasMedia, 'isImage=', isImage, 'playerState=', playerState, 'isMediaActive=', isMediaActive);
 
-      if (isMediaActive) {
-        // Show media player and hide mirroring elements
-        player.style.display = 'block';
-        video.classList.remove('visible');
-        video.style.display = 'none';
-        overlay.style.display = 'none';
-        const ambient = document.querySelector('.ambient-bg');
-        if (ambient) ambient.style.display = 'none';
-      } else {
-        // Hide media player and restore mirroring/idle elements
-        player.style.display = 'none';
-        const isMirroringActive = !!(video.srcObject);
-        video.style.display = 'block';
-        video.classList.toggle('visible', isMirroringActive);
-        overlay.style.display = isMirroringActive ? 'none' : 'flex';
-        const ambient = document.querySelector('.ambient-bg');
-        if (ambient) ambient.style.display = isMirroringActive ? 'none' : 'block';
+        if (isMediaActive) {
+          // Show media player and hide mirroring elements
+          player.style.display = 'block';
+          video.classList.remove('visible');
+          video.style.display = 'none';
+          overlay.style.display = 'none';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = 'none';
+        } else {
+          // Hide media player and restore mirroring/idle elements
+          player.style.display = 'none';
+          const isMirroringActive = !!(video.srcObject);
+          video.style.display = 'block';
+          video.classList.toggle('visible', isMirroringActive);
+          overlay.style.display = isMirroringActive ? 'none' : 'flex';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = isMirroringActive ? 'none' : 'block';
+        }
+      } catch (err) {
+        console.error('[BDcast] error in updateUIForMediaState:', err);
       }
     }
 
-    playerManager.addEventListener(
-      cast.framework.events.EventType.PLAYER_STATE_CHANGED,
-      (event) => {
-        console.log('[BDcast] PLAYER_STATE_CHANGED:', event.value);
-        updateUIForMediaState();
-      }
-    );
-
-    playerManager.addEventListener(
-      cast.framework.events.EventType.MEDIA_STATUS,
-      () => {
-        console.log('[BDcast] MEDIA_STATUS updated');
-        updateUIForMediaState();
-      }
-    );
-
-    playerManager.addEventListener(
-      cast.framework.events.EventType.REQUEST_LOAD,
-      (event) => {
-        console.log('[BDcast] REQUEST_LOAD received, cleaning up WebRTC screen mirroring');
-        if (pc) {
-          pc.close();
-          pc = null;
+    try {
+      playerManager.addEventListener(
+        cast.framework.events.EventType.PLAYER_STATE_CHANGED,
+        (event) => {
+          console.log('[BDcast] PLAYER_STATE_CHANGED:', event.value);
+          updateUIForMediaState();
         }
-        remoteDescSet = false;
-        pendingCandidates = [];
-        video.srcObject = null;
-      }
-    );
+      );
+    } catch (e) {
+      console.warn('[BDcast] Failed to add PLAYER_STATE_CHANGED listener:', e);
+    }
+
+    try {
+      playerManager.addEventListener(
+        cast.framework.events.EventType.MEDIA_STATUS,
+        () => {
+          console.log('[BDcast] MEDIA_STATUS updated');
+          updateUIForMediaState();
+        }
+      );
+    } catch (e) {
+      console.warn('[BDcast] Failed to add MEDIA_STATUS listener:', e);
+    }
+
+    try {
+      playerManager.addEventListener(
+        cast.framework.events.EventType.REQUEST_LOAD,
+        (event) => {
+          console.log('[BDcast] REQUEST_LOAD received, cleaning up WebRTC screen mirroring');
+          if (pc) {
+            pc.close();
+            pc = null;
+          }
+          remoteDescSet = false;
+          pendingCandidates = [];
+          video.srcObject = null;
+        }
+      );
+    } catch (e) {
+      console.warn('[BDcast] Failed to add REQUEST_LOAD listener:', e);
+    }
 
     context.addCustomMessageListener(NS, async (event) => {
       senderId = event.senderId;
@@ -511,7 +527,6 @@
       }
       if (title !== null) setStatus(title, sub);
     }
-
 
   </script>
 </body>
