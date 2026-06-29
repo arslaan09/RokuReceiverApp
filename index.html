@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BDcast Receiver</title>
+  <title>TV Cast Receiver</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
@@ -17,7 +17,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Video ── */
+    /* ── WebRTC mirror video ── */
     #video {
       position: fixed;
       inset: 0;
@@ -29,6 +29,15 @@
       z-index: 1;
     }
     #video.visible { opacity: 1; }
+
+    /* ── Standard Cast Media Player ── */
+    cast-media-player {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      z-index: 10;
+      display: none;
+    }
 
     /* ── Ambient Background Glows ── */
     .ambient-bg {
@@ -166,8 +175,11 @@
     <div class="glow-blob blob2"></div>
   </div>
 
-  <!-- No 'muted': Cast Web Receiver allows unmuted autoplay; iOS controls audio via track.isEnabled -->
-  <video id="video" autoplay playsinline></video>
+  <!-- Start muted to ensure Chromium autoplay succeeds; iOS controls audio via track.isEnabled -->
+  <video id="video" autoplay playsinline muted></video>
+
+  <!-- Standard Cast Media Player -->
+  <cast-media-player></cast-media-player>
 
   <div id="overlay">
     <div class="glass-card">
@@ -180,8 +192,8 @@
         </svg>
       </div>
       <div>
-        <div id="status-title">Waiting for BDcast…</div>
-        <div id="status-sub">Open BDcast on your iPhone and connect to this TV</div>
+        <div id="status-title">Screen Mirroring</div>
+        <div id="status-sub">Open the app on your iPhone to connect and start mirroring or casting</div>
       </div>
     </div>
   </div>
@@ -239,6 +251,22 @@
 
     // ── Cast Receiver setup ───────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
+
+    // ── Standard Cast Media Player Listener ────────────────────────────────
+    const playerManager = context.getPlayerManager();
+    playerManager.addEventListener(
+      cast.framework.events.EventType.PLAYER_STATE_CHANGED,
+      (event) => {
+        const player = document.querySelector('cast-media-player');
+        if (player) {
+          if (event.value === cast.framework.messages.PlayerState.IDLE) {
+            player.style.display = 'none';
+          } else {
+            player.style.display = 'block';
+          }
+        }
+      }
+    );
 
     context.addCustomMessageListener(NS, async (event) => {
       senderId = event.senderId;
@@ -304,7 +332,11 @@
         if (video.srcObject !== stream) {
           video.srcObject = stream;
           video.volume = 1;
-          video.play().catch(e => console.warn('[BDcast] play():', e));
+          video.play().catch(e => {
+            console.warn('[BDcast] play() failed, retrying muted:', e);
+            video.muted = true;
+            video.play().catch(e2 => console.error('[BDcast] play(muted) failed:', e2));
+          });
         }
         showStream(true);
         setStatus('Mirroring active');
@@ -411,6 +443,8 @@
       }
       if (title !== null) setStatus(title, sub);
     }
+
+
   </script>
 </body>
 </html>
