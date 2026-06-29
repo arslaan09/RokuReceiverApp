@@ -254,17 +254,77 @@
 
     // ── Standard Cast Media Player Listener ────────────────────────────────
     const playerManager = context.getPlayerManager();
+
+    function updateUIForMediaState() {
+      const player = document.querySelector('cast-media-player');
+      if (!player) return;
+
+      const mediaInfo = playerManager.getMediaInformation();
+      const playerState = playerManager.getPlayerState();
+
+      const hasMedia = !!(mediaInfo && mediaInfo.contentId);
+      const isImage = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
+      const isIdle = playerState === cast.framework.messages.PlayerState.IDLE;
+
+      // Determine if media player should be active
+      let isMediaActive = false;
+      if (hasMedia) {
+        if (isImage) {
+          isMediaActive = true;
+        } else {
+          isMediaActive = !isIdle;
+        }
+      }
+
+      console.log('[BDcast] updateUI: hasMedia=', hasMedia, 'isImage=', isImage, 'playerState=', playerState, 'isMediaActive=', isMediaActive);
+
+      if (isMediaActive) {
+        // Show media player and hide mirroring elements
+        player.style.display = 'block';
+        video.classList.remove('visible');
+        video.style.display = 'none';
+        overlay.style.display = 'none';
+        const ambient = document.querySelector('.ambient-bg');
+        if (ambient) ambient.style.display = 'none';
+      } else {
+        // Hide media player and restore mirroring/idle elements
+        player.style.display = 'none';
+        const isMirroringActive = !!(video.srcObject);
+        video.style.display = 'block';
+        video.classList.toggle('visible', isMirroringActive);
+        overlay.style.display = isMirroringActive ? 'none' : 'flex';
+        const ambient = document.querySelector('.ambient-bg');
+        if (ambient) ambient.style.display = isMirroringActive ? 'none' : 'block';
+      }
+    }
+
     playerManager.addEventListener(
       cast.framework.events.EventType.PLAYER_STATE_CHANGED,
       (event) => {
-        const player = document.querySelector('cast-media-player');
-        if (player) {
-          if (event.value === cast.framework.messages.PlayerState.IDLE) {
-            player.style.display = 'none';
-          } else {
-            player.style.display = 'block';
-          }
+        console.log('[BDcast] PLAYER_STATE_CHANGED:', event.value);
+        updateUIForMediaState();
+      }
+    );
+
+    playerManager.addEventListener(
+      cast.framework.events.EventType.MEDIA_STATUS,
+      () => {
+        console.log('[BDcast] MEDIA_STATUS updated');
+        updateUIForMediaState();
+      }
+    );
+
+    playerManager.addEventListener(
+      cast.framework.events.EventType.REQUEST_LOAD,
+      (event) => {
+        console.log('[BDcast] REQUEST_LOAD received, cleaning up WebRTC screen mirroring');
+        if (pc) {
+          pc.close();
+          pc = null;
         }
+        remoteDescSet = false;
+        pendingCandidates = [];
+        video.srcObject = null;
       }
     );
 
@@ -433,6 +493,14 @@
     }
 
     function cleanup(title, sub, keepOverlay = false) {
+      try {
+        if (playerManager) {
+          playerManager.stop();
+        }
+      } catch (e) {
+        console.warn('[BDcast] playerManager.stop() error:', e);
+      }
+
       if (pc) { pc.close(); pc = null; }
       remoteDescSet     = false;
       pendingCandidates = [];
