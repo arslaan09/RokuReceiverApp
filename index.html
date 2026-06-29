@@ -372,6 +372,7 @@
     context.addEventListener(
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
+        cleanup(null, null, true);
         setConnected(true);
         setStatus('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
       }
