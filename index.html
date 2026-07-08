@@ -198,6 +198,9 @@
   <!-- Standard Cast Media Player -->
   <cast-media-player></cast-media-player>
 
+  <!-- Image container for photo casting -->
+  <img id="image-player" style="position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 9; display: none;" />
+
   <div id="overlay">
     <div class="glass-card">
       <div class="logo-ring" id="logo-ring">
@@ -306,7 +309,17 @@
 
         if (isMediaActive) {
           // Show the media player, hide mirroring elements.
-          player.style.display = 'block';
+          const imgPlayer = document.getElementById('image-player');
+          if (isImage) {
+            if (imgPlayer) {
+              imgPlayer.src = mediaInfo.contentId;
+              imgPlayer.style.display = 'block';
+            }
+            player.style.display = 'none';
+          } else {
+            if (imgPlayer) imgPlayer.style.display = 'none';
+            player.style.display = 'block';
+          }
           video.classList.remove('visible');
           video.style.display = 'none';
           overlay.style.display = 'none';
@@ -314,6 +327,8 @@
           if (ambient) ambient.style.display = 'none';
         } else {
           // Restore mirroring / idle elements.
+          const imgPlayer = document.getElementById('image-player');
+          if (imgPlayer) imgPlayer.style.display = 'none';
           player.style.display = 'none';
           const isMirroringActive = !!(video.srcObject);
           video.style.display = 'block';
@@ -336,14 +351,15 @@
         cast.framework.events.EventType.MEDIA_STATUS,
         () => updateUIForMediaState()
       );
-      playerManager.addEventListener(
-        cast.framework.events.EventType.REQUEST_LOAD,
-        () => {
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.LOAD,
+        (loadRequestData) => {
           // Media casting takes over — clean up any WebRTC mirroring session.
           if (pc) { pc.close(); pc = null; }
           remoteDescSet = false;
           pendingCandidates = [];
           video.srcObject = null;
+          return loadRequestData;
         }
       );
     } catch (e) {
