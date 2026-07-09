@@ -300,11 +300,13 @@
 
         const hasMedia = !!(mediaInfo && mediaInfo.contentId);
         const isImage  = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
-        const isIdle   = !playerState || playerState === 'IDLE';
+        const mediaStatus = playerManager ? playerManager.getMediaStatus() : null;
+        const idleReason  = mediaStatus ? mediaStatus.idleReason : null;
+        const isEnded     = playerState === 'IDLE' && (idleReason === 'FINISHED' || idleReason === 'CANCELLED' || idleReason === 'ERROR');
 
         let isMediaActive = false;
         if (hasMedia) {
-          isMediaActive = isImage ? true : !isIdle;
+          isMediaActive = isImage ? true : !isEnded;
         }
 
         if (isMediaActive) {
