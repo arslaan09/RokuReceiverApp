@@ -35,7 +35,7 @@
       background: #000;
       opacity: 0;
       transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-      z-index: 1;
+      z-index: 3; /* WebRTC Mirroring above standard player */
     }
     #video.visible { opacity: 1; }
 
@@ -44,8 +44,8 @@
       position: fixed;
       inset: 0;
       width: 100%; height: 100%;
-      z-index: 10;
-      display: none;
+      z-index: 1; /* Keep base player active so CAF binds and plays successfully */
+      background: #000;
     }
 
     /* ── Ambient Background Glows ── */
@@ -53,7 +53,7 @@
       position: fixed;
       inset: 0;
       overflow: hidden;
-      z-index: 0;
+      z-index: 2; /* Cover the player during idle state */
       background: #060913;
     }
     .glow-blob {
@@ -88,7 +88,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      z-index: 2;
+      z-index: 5;
       transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
       pointer-events: none;
     }
@@ -330,11 +330,11 @@
               imgPlayer.src = contentIdentifier;
               imgPlayer.style.display = 'block';
             }
-            player.style.display = 'none';
           } else {
             if (imgPlayer) imgPlayer.style.display = 'none';
-            player.style.display = 'block';
           }
+          // We NEVER hide/show the 'cast-media-player' element itself with display: none.
+          // Instead we hide everything else on top of it.
           video.classList.remove('visible');
           video.style.display = 'none';
           overlay.style.display = 'none';
@@ -347,7 +347,7 @@
           // Restore mirroring / idle elements.
           const imgPlayer = document.getElementById('image-player');
           if (imgPlayer) imgPlayer.style.display = 'none';
-          player.style.display = 'none';
+          
           const isMirroringActive = !!(video.srcObject);
           video.style.display = 'block';
           video.classList.toggle('visible', isMirroringActive);
@@ -402,11 +402,8 @@
           pendingCandidates = [];
           video.srcObject = null;
 
-          // Immediately show cast-media-player and hide everything else.
-          // Don't wait for PLAYER_STATE_CHANGED — it may arrive after a delay.
-          const player = document.querySelector('cast-media-player');
+          // Hide overlay & mirroring elements immediately so the standard player is exposed.
           const imgPlayer = document.getElementById('image-player');
-          if (player) player.style.display = 'block';
           if (imgPlayer) imgPlayer.style.display = 'none';
           video.classList.remove('visible');
           video.style.display = 'none';
@@ -659,12 +656,6 @@
       if (imgPlayer) {
         imgPlayer.style.display = 'none';
         imgPlayer.src = '';
-      }
-
-      // Hide cast-media-player when cleaning up (unless media is active)
-      if (!keepOverlay && !mediaLoadInProgress) {
-        const castPlayer = document.querySelector('cast-media-player');
-        if (castPlayer) castPlayer.style.display = 'none';
       }
 
       if (!keepOverlay) {
