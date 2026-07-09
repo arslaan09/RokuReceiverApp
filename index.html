@@ -3,7 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BDcast Receiver</title>
+  <title>TV Cast Receiver</title>
+  <!--
+    Custom CAF receiver for Universal TV Remote (app ID 0A01ABD5).
+    Handles:
+      • WebRTC screen mirroring (signaling over urn:x-cast:com.bdcast.webrtc)
+      • Standard media casting (photos / videos / audio via cast-media-player)
+      • Friendly on-screen states + automatic shutdown when the session ends,
+        so the receiver never lingers on the TV after the user is done.
+    Deploy this file to the URL registered for the receiver app ID.
+  -->
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
@@ -17,7 +26,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Video ── */
+    /* ── WebRTC mirror video ── */
     #video {
       position: fixed;
       inset: 0;
@@ -26,16 +35,25 @@
       background: #000;
       opacity: 0;
       transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-      z-index: 1;
+      z-index: 3; /* WebRTC Mirroring above standard player */
     }
     #video.visible { opacity: 1; }
+
+    /* ── Standard Cast Media Player ── */
+    cast-media-player {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      z-index: 1; /* Keep base player active so CAF binds and plays successfully */
+      background: #000;
+    }
 
     /* ── Ambient Background Glows ── */
     .ambient-bg {
       position: fixed;
       inset: 0;
       overflow: hidden;
-      z-index: 0;
+      z-index: 2; /* Cover the player during idle state */
       background: #060913;
     }
     .glow-blob {
@@ -49,12 +67,12 @@
     .blob1 {
       top: -10%; left: -10%;
       width: 50vw; height: 50vw;
-      background: radial-gradient(circle, #3b82f6 0%, transparent 70%);
+      background: radial-gradient(circle, #6307f5 0%, transparent 70%);
     }
     .blob2 {
       bottom: -10%; right: -10%;
       width: 60vw; height: 60vw;
-      background: radial-gradient(circle, #8b5cf6 0%, transparent 70%);
+      background: radial-gradient(circle, #07f582 0%, transparent 70%);
       animation-delay: -5s;
     }
     @keyframes float {
@@ -70,7 +88,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      z-index: 2;
+      z-index: 5;
       transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
       pointer-events: none;
     }
@@ -90,7 +108,7 @@
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4),
                   inset 0 1px 1px rgba(255, 255, 255, 0.1);
       max-width: 90%;
-      width: 540px;
+      width: 560px;
       text-align: center;
     }
 
@@ -116,31 +134,39 @@
       inset: -5px;
       border-radius: 50%;
       border: 3px solid transparent;
-      border-top-color: #3b82f6;
+      border-top-color: #6307f5;
       animation: spin 1.8s linear infinite;
-      box-shadow: 0 0 15px rgba(59, 130, 246, 0.15);
+      box-shadow: 0 0 15px rgba(99, 7, 245, 0.2);
       transition: all 0.5s ease;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .logo-ring.connected {
-      border-color: rgba(34, 197, 94, 0.2);
-      background: rgba(34, 197, 94, 0.05);
-      box-shadow: 0 0 35px rgba(34, 197, 94, 0.25);
+      border-color: rgba(7, 245, 130, 0.2);
+      background: rgba(7, 245, 130, 0.05);
+      box-shadow: 0 0 35px rgba(7, 245, 130, 0.25);
     }
     .logo-ring.connected svg {
-      stroke: #22c55e;
-      filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.5));
+      stroke: #07f582;
+      filter: drop-shadow(0 0 8px rgba(7, 245, 130, 0.5));
     }
     .logo-ring.connected::before {
-      border-top-color: #22c55e;
+      border-top-color: #07f582;
       animation: pulse-ring 2s infinite ease-in-out;
-      box-shadow: 0 0 25px rgba(34, 197, 94, 0.3);
+      box-shadow: 0 0 25px rgba(7, 245, 130, 0.3);
     }
     @keyframes pulse-ring {
       0%, 100% { transform: scale(1); opacity: 0.8; }
       50%      { transform: scale(1.04); opacity: 1; }
     }
+
+    /* Ended state: calm, no spinner */
+    .logo-ring.ended::before { animation: none; border-top-color: transparent; box-shadow: none; }
+    .logo-ring.ended {
+      border-color: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .logo-ring.ended svg { stroke: rgba(255, 255, 255, 0.85); }
 
     /* ── Typography ── */
     #status-title {
@@ -166,8 +192,14 @@
     <div class="glow-blob blob2"></div>
   </div>
 
-  <!-- No 'muted': Cast Web Receiver allows unmuted autoplay; iOS controls audio via track.isEnabled -->
-  <video id="video" autoplay playsinline></video>
+  <!-- Start muted to ensure Chromium autoplay succeeds; iOS controls audio via track.isEnabled -->
+  <video id="video" autoplay playsinline muted></video>
+
+  <!-- Standard Cast Media Player -->
+  <cast-media-player></cast-media-player>
+
+  <!-- Image container for photo casting -->
+  <img id="image-player" style="position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 9; display: none;" />
 
   <div id="overlay">
     <div class="glass-card">
@@ -180,8 +212,8 @@
         </svg>
       </div>
       <div>
-        <div id="status-title">Waiting for BDcast…</div>
-        <div id="status-sub">Open BDcast on your iPhone and connect to this TV</div>
+        <div id="status-title">Ready to Connect</div>
+        <div id="status-sub">Open the app on your iPhone and tap “Tap to connect” to get started</div>
       </div>
     </div>
   </div>
@@ -201,10 +233,11 @@
 
     // ── State ─────────────────────────────────────────────────────────────
     const NS = 'urn:x-cast:com.bdcast.webrtc';
-    let pc               = null;
-    let senderId         = null;
-    let remoteDescSet    = false;
+    let pc                = null;
+    let senderId          = null;
+    let remoteDescSet     = false;
     let pendingCandidates = [];
+    let shutdownTimer     = null;
 
     // ── UI helpers ────────────────────────────────────────────────────────
     function setStatus(title, sub) {
@@ -219,13 +252,12 @@
       if (ambient) ambient.style.display = on ? 'none' : 'block';
     }
 
-    function setConnected(on) {
-      logoRing.classList.toggle('connected', on);
+    function setRingState(state) { // 'searching' | 'connected' | 'ended'
+      logoRing.classList.toggle('connected', state === 'connected');
+      logoRing.classList.toggle('ended', state === 'ended');
     }
 
-    // Adapt object-fit to stream orientation.
-    // Use both the resize event AND a 300 ms poll — Cast Web Receiver's Chromium
-    // does not always fire resize reliably when WebRTC changes frame dimensions.
+    // Adapt object-fit to stream orientation (portrait ⇄ landscape).
     function updateObjectFit() {
       if (!video.videoWidth || !video.videoHeight) return;
       const shouldCover = video.videoWidth > video.videoHeight;
@@ -237,9 +269,156 @@
     video.addEventListener('resize', updateObjectFit);
     setInterval(updateObjectFit, 300);
 
+    // ── Automatic shutdown ────────────────────────────────────────────────
+    // When the last phone disconnects, show a goodbye state briefly and then
+    // stop the receiver so the TV returns to its home screen instead of
+    // showing this app forever.
+    function scheduleShutdown() {
+      cancelShutdown();
+      setRingState('ended');
+      setStatus('Session ended', 'Closing… Reconnect anytime from the app on your iPhone');
+      shutdownTimer = setTimeout(() => {
+        try { context.stop(); } catch (e) { console.warn('[Receiver] stop failed:', e); }
+      }, 8000);
+    }
+
+    function cancelShutdown() {
+      if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
+    }
+
     // ── Cast Receiver setup ───────────────────────────────────────────────
     const context = cast.framework.CastReceiverContext.getInstance();
+    const playerManager = context.getPlayerManager();
 
+    // Track whether a media load is in progress so we keep the player visible
+    // even before the first PLAYER_STATE_CHANGED fires.
+    let mediaLoadInProgress = false;
+
+    function updateUIForMediaState() {
+      try {
+        const player = document.querySelector('cast-media-player');
+        if (!player) return;
+
+        const mediaInfo   = playerManager ? playerManager.getMediaInformation() : null;
+        const playerState = playerManager ? playerManager.getPlayerState() : null;
+
+        // Check both contentId AND contentUrl — newer CAF SDK versions may
+        // populate one but not the other.
+        const contentIdentifier = mediaInfo
+          ? (mediaInfo.contentId || mediaInfo.contentUrl || '')
+          : '';
+        const hasMedia = !!(contentIdentifier) || mediaLoadInProgress;
+        const isImage  = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
+        const mediaStatus = playerManager ? playerManager.getMediaStatus() : null;
+        const idleReason  = mediaStatus ? mediaStatus.idleReason : null;
+        const isEnded     = playerState === 'IDLE' && (idleReason === 'FINISHED' || idleReason === 'CANCELLED' || idleReason === 'ERROR');
+
+        let isMediaActive = false;
+        if (hasMedia) {
+          isMediaActive = isImage ? true : !isEnded;
+        }
+
+        console.log('[Receiver] updateUI — hasMedia:', hasMedia,
+                    'state:', playerState, 'idle:', idleReason,
+                    'active:', isMediaActive, 'loadInProgress:', mediaLoadInProgress);
+
+        if (isMediaActive) {
+          // Show the media player, hide mirroring elements.
+          const imgPlayer = document.getElementById('image-player');
+          if (isImage) {
+            if (imgPlayer) {
+              imgPlayer.src = contentIdentifier;
+              imgPlayer.style.display = 'block';
+            }
+          } else {
+            if (imgPlayer) imgPlayer.style.display = 'none';
+          }
+          // We NEVER hide/show the 'cast-media-player' element itself with display: none.
+          // Instead we hide everything else on top of it.
+          video.classList.remove('visible');
+          video.style.display = 'none';
+          overlay.style.display = 'none';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = 'none';
+        } else {
+          // Media finished or no media — clear the load flag.
+          mediaLoadInProgress = false;
+
+          // Restore mirroring / idle elements.
+          const imgPlayer = document.getElementById('image-player');
+          if (imgPlayer) imgPlayer.style.display = 'none';
+          
+          const isMirroringActive = !!(video.srcObject);
+          video.style.display = 'block';
+          video.classList.toggle('visible', isMirroringActive);
+          overlay.style.display = isMirroringActive ? 'none' : 'flex';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = isMirroringActive ? 'none' : 'block';
+        }
+      } catch (err) {
+        console.error('[Receiver] updateUIForMediaState error:', err);
+      }
+    }
+
+    try {
+      playerManager.addEventListener(
+        cast.framework.events.EventType.PLAYER_STATE_CHANGED,
+        (event) => {
+          console.log('[Receiver] PLAYER_STATE_CHANGED:', event.state);
+          // Clear load flag once the player enters a real playback state
+          if (event.state === 'PLAYING' || event.state === 'PAUSED') {
+            mediaLoadInProgress = false;
+          }
+          updateUIForMediaState();
+        }
+      );
+      playerManager.addEventListener(
+        cast.framework.events.EventType.MEDIA_STATUS,
+        () => updateUIForMediaState()
+      );
+      // Listen for media finished to restore idle UI
+      playerManager.addEventListener(
+        cast.framework.events.EventType.MEDIA_FINISHED,
+        () => {
+          console.log('[Receiver] MEDIA_FINISHED');
+          mediaLoadInProgress = false;
+          updateUIForMediaState();
+        }
+      );
+      playerManager.setMessageInterceptor(
+        cast.framework.messages.MessageType.LOAD,
+        (loadRequestData) => {
+          console.log('[Receiver] LOAD interceptor — media request received:',
+                      loadRequestData && loadRequestData.media
+                        ? (loadRequestData.media.contentId || loadRequestData.media.contentUrl)
+                        : 'unknown');
+          // Set load flag IMMEDIATELY so updateUI shows the player
+          mediaLoadInProgress = true;
+          cancelShutdown();
+
+          // Clean up any WebRTC mirroring session.
+          if (pc) { pc.close(); pc = null; }
+          remoteDescSet = false;
+          pendingCandidates = [];
+          video.srcObject = null;
+
+          // Hide overlay & mirroring elements immediately so the standard player is exposed.
+          const imgPlayer = document.getElementById('image-player');
+          if (imgPlayer) imgPlayer.style.display = 'none';
+          video.classList.remove('visible');
+          video.style.display = 'none';
+          overlay.style.display = 'none';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = 'none';
+
+          return loadRequestData;
+        }
+      );
+    } catch (e) {
+      console.warn('[Receiver] player listener setup failed:', e);
+    }
+
+    // ── Custom channel (WebRTC signaling) ─────────────────────────────────
     context.addCustomMessageListener(NS, async (event) => {
       senderId = event.senderId;
 
@@ -247,54 +426,106 @@
       try {
         msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
       } catch (e) {
-        console.error('[BDcast] Failed to parse message:', event.data, e);
+        console.error('[Receiver] failed to parse message:', event.data, e);
         return;
       }
 
-      console.log('[BDcast] received:', msg.type);
-
       switch (msg.type) {
-        case 'offer': await handleOffer(msg.sdp);  break;
-        case 'ice':   await handleICE(msg);         break;
+        case 'offer': await handleOffer(msg.sdp); break;
+        case 'ice':   await handleICE(msg);       break;
+        case 'image': handleImage(msg.url);       break;
         case 'stop':
-          cleanup('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
-          setConnected(true);
+          cleanup('Connected', 'Ready when you are — start mirroring or cast media from your iPhone');
+          setRingState('connected');
           break;
         default:
-          console.warn('[BDcast] unknown message type:', msg.type);
+          console.warn('[Receiver] unknown message type:', msg.type);
       }
     });
 
     context.addEventListener(
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
-        setConnected(true);
-        setStatus('Connected', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
+        cancelShutdown();
+        // Don't call cleanup() here — it would abort any in-flight media load.
+        // Just update the ring state and status text. If a media load arrives
+        // right after connection, the LOAD interceptor handles the UI switch.
+        setRingState('connected');
+        setStatus('Connected', 'Ready when you are — start mirroring or cast media from your iPhone');
       }
     );
 
     context.addEventListener(
       cast.framework.system.EventType.SENDER_DISCONNECTED,
       () => {
-        setConnected(false);
-        cleanup('Disconnected', 'Please connect from your iOS device');
+        cleanup(null, null);
+        // Only shut down when no sender remains (multi-sender safety).
+        const remaining = context.getSenders ? context.getSenders().length : 0;
+        if (remaining === 0) {
+          scheduleShutdown();
+        }
       }
     );
 
     context.start({
       touchScreenOptimizedApp: false,
-      maxInactivity: 3600
+      // Ends the session automatically when the sender vanishes without a
+      // clean disconnect (phone died, Wi-Fi dropped) — 10 minutes of silence.
+      maxInactivity: 600
     });
+
+    // ── Image handling ──────────────────────────────────────────────────────
+    function handleImage(imageUrl) {
+      console.log('[Receiver] Displaying image:', imageUrl);
+      cancelShutdown();
+
+      // Clean up any WebRTC session
+      if (pc) { pc.close(); pc = null; }
+      remoteDescSet = false;
+      pendingCandidates = [];
+      video.srcObject = null;
+
+      // Stop media player if running
+      try {
+        if (playerManager) playerManager.stop();
+      } catch (e) {
+        console.warn('[Receiver] playerManager.stop() error:', e);
+      }
+
+      // Display the image
+      const imgPlayer = document.getElementById('image-player');
+      if (imgPlayer) {
+        imgPlayer.src = imageUrl;
+        imgPlayer.style.display = 'block';
+        imgPlayer.onload = () => {
+          console.log('[Receiver] Image loaded successfully');
+        };
+        imgPlayer.onerror = () => {
+          console.error('[Receiver] Failed to load image:', imageUrl);
+        };
+      }
+
+      // Hide other elements
+      const player = document.querySelector('cast-media-player');
+      if (player) player.style.display = 'none';
+      video.classList.remove('visible');
+      video.style.display = 'none';
+      overlay.style.display = 'none';
+      const ambient = document.querySelector('.ambient-bg');
+      if (ambient) ambient.style.display = 'none';
+
+      setStatus('Photo displayed', 'Viewing photo from your iPhone');
+      setRingState('connected');
+    }
 
     // ── WebRTC ────────────────────────────────────────────────────────────
     function buildPeerConnection() {
-      const cfg = {
+      const conn = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302'  },
           { urls: 'stun:stun1.l.google.com:19302' },
         ]
-      };
-      const conn = new RTCPeerConnection(cfg);
+      });
 
       conn.ontrack = (event) => {
         if (event.receiver) event.receiver.playoutDelayHint = 0;
@@ -304,10 +535,13 @@
         if (video.srcObject !== stream) {
           video.srcObject = stream;
           video.volume = 1;
-          video.play().catch(e => console.warn('[BDcast] play():', e));
+          video.play().catch(() => {
+            video.muted = true;
+            video.play().catch(e => console.error('[Receiver] play(muted) failed:', e));
+          });
         }
         showStream(true);
-        setStatus('Mirroring active');
+        setStatus('Mirroring live');
       };
 
       conn.onicecandidate = ({ candidate }) => {
@@ -321,25 +555,25 @@
       };
 
       conn.oniceconnectionstatechange = () => {
-        console.log('[WebRTC] ICE state:', conn.iceConnectionState);
         switch (conn.iceConnectionState) {
           case 'connected':
           case 'completed':
-            setStatus('Stream connected', 'Receiving screen');
+            setStatus('Mirroring live', 'Receiving your iPhone screen');
             break;
           case 'disconnected':
-            setStatus('Connecting…', 'Network connection weak, trying to reconnect');
+            setStatus('Reconnecting…', 'The connection is weak — hold on a moment');
             break;
           case 'failed':
             setTimeout(() => {
               if (conn && conn.iceConnectionState === 'failed') {
-                cleanup('Connection lost', 'Ready to mirror. Tap "Start Mirroring" on your iPhone');
-                setConnected(true);
+                cleanup('Connection lost', 'Tap “Start Mirroring” on your iPhone to try again');
+                setRingState('connected');
               }
             }, 10000);
             break;
           case 'closed':
-            cleanup('Disconnected', 'Please connect from your iOS device');
+            cleanup('Mirroring ended', 'Start mirroring again from your iPhone whenever you like');
+            setRingState('ended');
             break;
         }
       };
@@ -350,16 +584,16 @@
     async function handleOffer(sdpStr) {
       remoteDescSet     = false;
       pendingCandidates = [];
+      cancelShutdown();
       cleanup(null, null, true);
-      setStatus('Connecting…', 'Establishing WebRTC session');
-      setConnected(true);
+      setStatus('Connecting…', 'Setting up the mirror stream');
+      setRingState('connected');
 
       pc = buildPeerConnection();
 
       try {
         await pc.setRemoteDescription({ type: 'offer', sdp: sdpStr });
         remoteDescSet = true;
-        console.log('[BDcast] remote description set, flushing', pendingCandidates.length, 'buffered ICE candidates');
 
         for (const c of pendingCandidates) {
           try { await pc.addIceCandidate(c); } catch (_) {}
@@ -368,16 +602,15 @@
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        console.log('[BDcast] answer created, sending back to iOS');
 
         context.sendCustomMessage(NS, senderId, {
           type: 'answer',
           sdp:  pc.localDescription.sdp,
         });
       } catch (err) {
-        console.error('[BDcast] offer handling error:', err);
-        cleanup('Connection failed', err.message);
-        setConnected(true);
+        console.error('[Receiver] offer handling error:', err);
+        cleanup('Connection failed', 'Please try again from your iPhone');
+        setRingState('connected');
       }
     }
 
@@ -396,18 +629,38 @@
       try {
         await pc.addIceCandidate(candidate);
       } catch (e) {
-        console.warn('[BDcast] addIceCandidate error (benign):', e.message);
+        console.warn('[Receiver] addIceCandidate error (benign):', e.message);
       }
     }
 
     function cleanup(title, sub, keepOverlay = false) {
+      // Only stop media playback during a full cleanup (not during sender
+      // connect events where keepOverlay=true) to prevent aborting in-flight
+      // media load requests.
+      if (!keepOverlay) {
+        try {
+          if (playerManager) playerManager.stop();
+        } catch (e) {
+          console.warn('[Receiver] playerManager.stop() error:', e);
+        }
+        mediaLoadInProgress = false;
+      }
+
       if (pc) { pc.close(); pc = null; }
       remoteDescSet     = false;
       pendingCandidates = [];
       video.srcObject   = null;
+
+      // Hide image player
+      const imgPlayer = document.getElementById('image-player');
+      if (imgPlayer) {
+        imgPlayer.style.display = 'none';
+        imgPlayer.src = '';
+      }
+
       if (!keepOverlay) {
         showStream(false);
-        setConnected(false);
+        setRingState('searching');
       }
       if (title !== null) setStatus(title, sub);
     }
