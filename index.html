@@ -381,6 +381,7 @@
       switch (msg.type) {
         case 'offer': await handleOffer(msg.sdp); break;
         case 'ice':   await handleICE(msg);       break;
+        case 'image': handleImage(msg.url);       break;
         case 'stop':
           cleanup('Connected', 'Ready when you are — start mirroring or cast media from your iPhone');
           setRingState('connected');
@@ -418,6 +419,50 @@
       // clean disconnect (phone died, Wi-Fi dropped) — 10 minutes of silence.
       maxInactivity: 600
     });
+
+    // ── Image handling ──────────────────────────────────────────────────────
+    function handleImage(imageUrl) {
+      console.log('[Receiver] Displaying image:', imageUrl);
+      cancelShutdown();
+
+      // Clean up any WebRTC session
+      if (pc) { pc.close(); pc = null; }
+      remoteDescSet = false;
+      pendingCandidates = [];
+      video.srcObject = null;
+
+      // Stop media player if running
+      try {
+        if (playerManager) playerManager.stop();
+      } catch (e) {
+        console.warn('[Receiver] playerManager.stop() error:', e);
+      }
+
+      // Display the image
+      const imgPlayer = document.getElementById('image-player');
+      if (imgPlayer) {
+        imgPlayer.src = imageUrl;
+        imgPlayer.style.display = 'block';
+        imgPlayer.onload = () => {
+          console.log('[Receiver] Image loaded successfully');
+        };
+        imgPlayer.onerror = () => {
+          console.error('[Receiver] Failed to load image:', imageUrl);
+        };
+      }
+
+      // Hide other elements
+      const player = document.querySelector('cast-media-player');
+      if (player) player.style.display = 'none';
+      video.classList.remove('visible');
+      video.style.display = 'none';
+      overlay.style.display = 'none';
+      const ambient = document.querySelector('.ambient-bg');
+      if (ambient) ambient.style.display = 'none';
+
+      setStatus('Photo displayed', 'Viewing photo from your iPhone');
+      setRingState('connected');
+    }
 
     // ── WebRTC ────────────────────────────────────────────────────────────
     function buildPeerConnection() {
@@ -545,6 +590,14 @@
       remoteDescSet     = false;
       pendingCandidates = [];
       video.srcObject   = null;
+
+      // Hide image player
+      const imgPlayer = document.getElementById('image-player');
+      if (imgPlayer) {
+        imgPlayer.style.display = 'none';
+        imgPlayer.src = '';
+      }
+
       if (!keepOverlay) {
         showStream(false);
         setRingState('searching');
