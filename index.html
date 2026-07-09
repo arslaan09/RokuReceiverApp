@@ -727,6 +727,9 @@
         imgPlayer.style.display = 'block';
         imgPlayer.onload = () => {
           console.log('[Receiver] Image loaded successfully');
+          if (senderId) {
+            context.sendCustomMessage(NS, senderId, { type: 'IMAGE_DISPLAYED' });
+          }
         };
         imgPlayer.onerror = () => {
           console.error('[Receiver] Failed to load image:', imageUrl);
