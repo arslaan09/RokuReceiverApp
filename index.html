@@ -290,6 +290,10 @@
     const context = cast.framework.CastReceiverContext.getInstance();
     const playerManager = context.getPlayerManager();
 
+    // Track whether a media load is in progress so we keep the player visible
+    // even before the first PLAYER_STATE_CHANGED fires.
+    let mediaLoadInProgress = false;
+
     function updateUIForMediaState() {
       try {
         const player = document.querySelector('cast-media-player');
@@ -298,7 +302,12 @@
         const mediaInfo   = playerManager ? playerManager.getMediaInformation() : null;
         const playerState = playerManager ? playerManager.getPlayerState() : null;
 
-        const hasMedia = !!(mediaInfo && mediaInfo.contentId);
+        // Check both contentId AND contentUrl — newer CAF SDK versions may
+        // populate one but not the other.
+        const contentIdentifier = mediaInfo
+          ? (mediaInfo.contentId || mediaInfo.contentUrl || '')
+          : '';
+        const hasMedia = !!(contentIdentifier) || mediaLoadInProgress;
         const isImage  = !!(mediaInfo && mediaInfo.contentType && mediaInfo.contentType.startsWith('image/'));
         const mediaStatus = playerManager ? playerManager.getMediaStatus() : null;
         const idleReason  = mediaStatus ? mediaStatus.idleReason : null;
@@ -309,12 +318,16 @@
           isMediaActive = isImage ? true : !isEnded;
         }
 
+        console.log('[Receiver] updateUI — hasMedia:', hasMedia,
+                    'state:', playerState, 'idle:', idleReason,
+                    'active:', isMediaActive, 'loadInProgress:', mediaLoadInProgress);
+
         if (isMediaActive) {
           // Show the media player, hide mirroring elements.
           const imgPlayer = document.getElementById('image-player');
           if (isImage) {
             if (imgPlayer) {
-              imgPlayer.src = mediaInfo.contentId;
+              imgPlayer.src = contentIdentifier;
               imgPlayer.style.display = 'block';
             }
             player.style.display = 'none';
@@ -328,6 +341,9 @@
           const ambient = document.querySelector('.ambient-bg');
           if (ambient) ambient.style.display = 'none';
         } else {
+          // Media finished or no media — clear the load flag.
+          mediaLoadInProgress = false;
+
           // Restore mirroring / idle elements.
           const imgPlayer = document.getElementById('image-player');
           if (imgPlayer) imgPlayer.style.display = 'none';
@@ -347,20 +363,57 @@
     try {
       playerManager.addEventListener(
         cast.framework.events.EventType.PLAYER_STATE_CHANGED,
-        () => updateUIForMediaState()
+        (event) => {
+          console.log('[Receiver] PLAYER_STATE_CHANGED:', event.state);
+          // Clear load flag once the player enters a real playback state
+          if (event.state === 'PLAYING' || event.state === 'PAUSED') {
+            mediaLoadInProgress = false;
+          }
+          updateUIForMediaState();
+        }
       );
       playerManager.addEventListener(
         cast.framework.events.EventType.MEDIA_STATUS,
         () => updateUIForMediaState()
       );
+      // Listen for media finished to restore idle UI
+      playerManager.addEventListener(
+        cast.framework.events.EventType.MEDIA_FINISHED,
+        () => {
+          console.log('[Receiver] MEDIA_FINISHED');
+          mediaLoadInProgress = false;
+          updateUIForMediaState();
+        }
+      );
       playerManager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         (loadRequestData) => {
-          // Media casting takes over — clean up any WebRTC mirroring session.
+          console.log('[Receiver] LOAD interceptor — media request received:',
+                      loadRequestData && loadRequestData.media
+                        ? (loadRequestData.media.contentId || loadRequestData.media.contentUrl)
+                        : 'unknown');
+          // Set load flag IMMEDIATELY so updateUI shows the player
+          mediaLoadInProgress = true;
+          cancelShutdown();
+
+          // Clean up any WebRTC mirroring session.
           if (pc) { pc.close(); pc = null; }
           remoteDescSet = false;
           pendingCandidates = [];
           video.srcObject = null;
+
+          // Immediately show cast-media-player and hide everything else.
+          // Don't wait for PLAYER_STATE_CHANGED — it may arrive after a delay.
+          const player = document.querySelector('cast-media-player');
+          const imgPlayer = document.getElementById('image-player');
+          if (player) player.style.display = 'block';
+          if (imgPlayer) imgPlayer.style.display = 'none';
+          video.classList.remove('visible');
+          video.style.display = 'none';
+          overlay.style.display = 'none';
+          const ambient = document.querySelector('.ambient-bg');
+          if (ambient) ambient.style.display = 'none';
+
           return loadRequestData;
         }
       );
@@ -397,7 +450,9 @@
       cast.framework.system.EventType.SENDER_CONNECTED,
       () => {
         cancelShutdown();
-        cleanup(null, null, true);
+        // Don't call cleanup() here — it would abort any in-flight media load.
+        // Just update the ring state and status text. If a media load arrives
+        // right after connection, the LOAD interceptor handles the UI switch.
         setRingState('connected');
         setStatus('Connected', 'Ready when you are — start mirroring or cast media from your iPhone');
       }
@@ -582,10 +637,16 @@
     }
 
     function cleanup(title, sub, keepOverlay = false) {
-      try {
-        if (playerManager) playerManager.stop();
-      } catch (e) {
-        console.warn('[Receiver] playerManager.stop() error:', e);
+      // Only stop media playback during a full cleanup (not during sender
+      // connect events where keepOverlay=true) to prevent aborting in-flight
+      // media load requests.
+      if (!keepOverlay) {
+        try {
+          if (playerManager) playerManager.stop();
+        } catch (e) {
+          console.warn('[Receiver] playerManager.stop() error:', e);
+        }
+        mediaLoadInProgress = false;
       }
 
       if (pc) { pc.close(); pc = null; }
@@ -598,6 +659,12 @@
       if (imgPlayer) {
         imgPlayer.style.display = 'none';
         imgPlayer.src = '';
+      }
+
+      // Hide cast-media-player when cleaning up (unless media is active)
+      if (!keepOverlay && !mediaLoadInProgress) {
+        const castPlayer = document.querySelector('cast-media-player');
+        if (castPlayer) castPlayer.style.display = 'none';
       }
 
       if (!keepOverlay) {
