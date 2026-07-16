@@ -343,8 +343,12 @@
     <div class="glow-blob blob2"></div>
   </div>
 
-  <!-- Start muted to ensure Chromium autoplay succeeds; iOS controls audio via track.isEnabled -->
+  <!-- Mirror video stays PERMANENTLY muted (autoplay-safe). Mirroring sound
+       plays through the dedicated #audio-sink element below, fed by the
+       WebRTC audio track — the two stay in sync because they share one
+       peer connection (RTCP lip-sync). -->
   <video id="video" autoplay playsinline muted></video>
+  <audio id="audio-sink" autoplay></audio>
 
   <!-- Standard Cast Media Player -->
   <cast-media-player></cast-media-player>
@@ -414,6 +418,7 @@
 
     // ── DOM refs ──────────────────────────────────────────────────────────
     const video       = document.getElementById('video');
+    const audioSink   = document.getElementById('audio-sink');
     const overlay     = document.getElementById('overlay');
     const logoRing    = document.getElementById('logo-ring');
     const statusTitle = document.getElementById('status-title');
@@ -436,6 +441,57 @@
 
     let mediaStopping = false;
     let isAudioMode = false;
+    // Volume requested by the phone (0–1). Applied to whichever element is
+    // playing — the WebRTC mirror video and/or the custom media player.
+    let requestedVolume = 1;
+    let audioStateInterval = null;
+
+    // Diagnostic ping to the phone: how many audio tracks arrived and whether
+    // the audio sink is actually playing. Logged on the iOS side.
+    let lastAudioPlayError = '';
+    function reportAudioState() {
+      try {
+        if (!pc || !senderId) return;
+        const audioTracks = pc.getReceivers
+          ? pc.getReceivers().filter(r => r.track && r.track.kind === 'audio').length
+          : -1;
+        context.sendCustomMessage(NS, senderId, {
+          type: 'AUDIO_STATE',
+          rv: 5, // receiver revision — lets the phone verify the deployed version
+          audioTracks: audioTracks,
+          muted: audioSink.muted,
+          volume: audioSink.volume,
+          paused: audioSink.paused,
+          playError: lastAudioPlayError || 'none'
+        });
+      } catch (e) { /* diagnostics only */ }
+    }
+
+    // Starts (or restarts) audio-sink playback and records any rejection so
+    // the phone can see WHY the TV is silent. Chromecast normally allows
+    // autoplay with sound, but retry on failure just in case.
+    function playAudioSink() {
+      if (!audioSink.srcObject) return;
+      audioSink.muted  = requestedVolume <= 0.001;
+      audioSink.volume = requestedVolume;
+      const p = audioSink.play();
+      if (p) p.then(() => {
+        lastAudioPlayError = '';
+      }).catch((e) => {
+        lastAudioPlayError = String(e && e.name ? e.name : e);
+        console.warn('[Receiver] audio play failed:', e);
+        setTimeout(playAudioSink, 1000); // keep retrying while a track exists
+      });
+    }
+
+    function startAudioStateReporting() {
+      if (audioStateInterval) return;
+      audioStateInterval = setInterval(reportAudioState, 5000);
+    }
+
+    function stopAudioStateReporting() {
+      if (audioStateInterval) { clearInterval(audioStateInterval); audioStateInterval = null; }
+    }
     let mediaRetryCount = 0;
     const MAX_MEDIA_RETRIES = 4;
     let mediaRetryTimer = null;
@@ -598,10 +654,13 @@
           cancelShutdown();
 
           // Clean up any WebRTC mirroring session.
+          stopAudioStateReporting();
           if (pc) { pc.close(); pc = null; }
           remoteDescSet = false;
           pendingCandidates = [];
           video.srcObject = null;
+          audioSink.srcObject = null;
+          audioSink.pause();
 
           // Hide overlay & mirroring elements immediately so the standard player is exposed.
           const imgPlayer = document.getElementById('image-player');
@@ -655,10 +714,19 @@
         case 'MEDIA_CONTROL':
           handleMediaControl(msg.command, msg.value);
           break;
-        case 'SET_VOLUME':
+        case 'SET_VOLUME': {
           const v = parseFloat(msg.volume);
-          if (!isNaN(v)) mediaPlayer.volume = Math.max(0, Math.min(1, v));
+          if (!isNaN(v)) {
+            requestedVolume = Math.max(0, Math.min(1, v));
+            // Mirroring sound (dedicated audio element)
+            audioSink.volume = requestedVolume;
+            audioSink.muted  = requestedVolume <= 0.001;
+            // Custom media player (video/audio casting)
+            mediaPlayer.volume = requestedVolume;
+            if (requestedVolume > 0.001) mediaPlayer.muted = false;
+          }
           break;
+        }
         case 'STOP_CASTING':
           console.log('[Receiver] STOP_CASTING received — returning to splash');
           returnToSplash();
@@ -708,10 +776,13 @@
       isImageActive = true;
 
       // Clean up any WebRTC session
+      stopAudioStateReporting();
       if (pc) { pc.close(); pc = null; }
       remoteDescSet = false;
       pendingCandidates = [];
       video.srcObject = null;
+      audioSink.srcObject = null;
+      audioSink.pause();
 
       // Stop media player if running
       try {
@@ -758,19 +829,32 @@
 
       conn.ontrack = (event) => {
         if (event.receiver) event.receiver.playoutDelayHint = 0;
+
+        // AUDIO: plays through the dedicated #audio-sink element only.
+        // The mirror video element stays muted forever, so its autoplay can
+        // never be blocked and never swallows the sound.
+        if (event.track && event.track.kind === 'audio') {
+          console.log('[Receiver] audio track received — attaching to sink');
+          audioSink.srcObject = new MediaStream([event.track]);
+          playAudioSink();
+          reportAudioState();
+          startAudioStateReporting();
+          return;
+        }
+
+        // VIDEO
         let stream = event.streams[0];
         if (!stream && event.track) stream = new MediaStream([event.track]);
         if (!stream) return;
         if (video.srcObject !== stream) {
           video.srcObject = stream;
-          video.volume = 1;
-          video.play().catch(() => {
-            video.muted = true;
-            video.play().catch(e => console.error('[Receiver] play(muted) failed:', e));
-          });
+          video.muted = true; // sound comes from #audio-sink, never from here
+          video.play().catch(e => console.error('[Receiver] video play failed:', e));
         }
         showStream(true);
         setStatus('Mirroring live');
+        reportAudioState();
+        startAudioStateReporting();
       };
 
       conn.onicecandidate = ({ candidate }) => {
@@ -788,6 +872,10 @@
           case 'connected':
           case 'completed':
             setStatus('Mirroring live', 'Receiving your iPhone screen');
+            // Kick the audio sink again now that the session is established —
+            // mirroring audio streams at full volume; the TV remote sets loudness.
+            if (audioSink.paused) playAudioSink();
+            reportAudioState();
             break;
           case 'disconnected':
             setStatus('Reconnecting…', 'The connection is weak — hold on a moment');
@@ -935,7 +1023,8 @@
 
     mediaPlayer.addEventListener('loadeddata', () => {
       console.log('[Receiver] media loadeddata — unmuting custom player');
-      mediaPlayer.muted = false;
+      mediaPlayer.volume = requestedVolume;
+      mediaPlayer.muted = requestedVolume <= 0.001;
     });
 
     mediaPlayer.addEventListener('seeked', () => {
@@ -1108,10 +1197,13 @@
         hideAudioOverlay();
       }
 
+      stopAudioStateReporting();
       if (pc) { pc.close(); pc = null; }
       remoteDescSet     = false;
       pendingCandidates = [];
       video.srcObject   = null;
+      audioSink.srcObject = null;
+      audioSink.pause();
 
       // Hide image player
       const imgPlayer = document.getElementById('image-player');
