@@ -446,23 +446,46 @@
     let requestedVolume = 1;
     let audioStateInterval = null;
 
-    // Diagnostic ping to the phone: how many audio tracks arrived and whether
-    // the audio sink is actually playing. Logged on the iOS side.
+    // Diagnostic ping to the phone: how many audio tracks arrived, whether
+    // the audio sink is actually playing, and inbound audio QUALITY counters
+    // (packet loss / concealment) so choppy sound can be attributed to the
+    // network vs the pipeline. Logged on the iOS side.
     let lastAudioPlayError = '';
-    function reportAudioState() {
+    async function reportAudioState() {
       try {
         if (!pc || !senderId) return;
         const audioTracks = pc.getReceivers
           ? pc.getReceivers().filter(r => r.track && r.track.kind === 'audio').length
           : -1;
+
+        // Inbound audio RTP quality (best effort — older receivers may lack fields)
+        let lost = -1, concealed = -1, received = -1, jbDelay = -1;
+        try {
+          const stats = await pc.getStats();
+          stats.forEach(s => {
+            if (s.type === 'inbound-rtp' && (s.kind === 'audio' || s.mediaType === 'audio')) {
+              lost      = s.packetsLost ?? -1;
+              received  = s.packetsReceived ?? -1;
+              concealed = s.concealedSamples ?? -1;
+              jbDelay   = (s.jitterBufferDelay && s.jitterBufferEmittedCount)
+                ? Math.round(1000 * s.jitterBufferDelay / s.jitterBufferEmittedCount)
+                : -1;
+            }
+          });
+        } catch (_) {}
+
         context.sendCustomMessage(NS, senderId, {
           type: 'AUDIO_STATE',
-          rv: 5, // receiver revision — lets the phone verify the deployed version
+          rv: 6, // receiver revision — lets the phone verify the deployed version
           audioTracks: audioTracks,
           muted: audioSink.muted,
           volume: audioSink.volume,
           paused: audioSink.paused,
-          playError: lastAudioPlayError || 'none'
+          playError: lastAudioPlayError || 'none',
+          pktsReceived: received,
+          pktsLost: lost,
+          concealedSamples: concealed,
+          jitterBufferMs: jbDelay
         });
       } catch (e) { /* diagnostics only */ }
     }
@@ -828,7 +851,13 @@
       });
 
       conn.ontrack = (event) => {
-        if (event.receiver) event.receiver.playoutDelayHint = 0;
+        // Zero playout delay ONLY for video (mirroring latency). Audio keeps
+        // WebRTC's adaptive jitter buffer — forcing 0 there strips the
+        // receiver's ability to absorb Wi-Fi jitter / wait for FEC, which
+        // turns every network hiccup into an audible glitch.
+        if (event.receiver && event.track && event.track.kind === 'video') {
+          event.receiver.playoutDelayHint = 0;
+        }
 
         // AUDIO: plays through the dedicated #audio-sink element only.
         // The mirror video element stays muted forever, so its autoplay can
