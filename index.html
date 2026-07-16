@@ -356,6 +356,9 @@
   <!-- Image container for photo casting -->
   <img id="image-player" style="position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; z-index: 9; display: none;" />
 
+  <!-- Full-screen connected background image -->
+  <img id="connected-bg-img" src="TV-Connected.svg" style="position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 4; display: none;" />
+
   <!-- Custom Media Player for video/audio casting -->
   <video id="media-player" class="hidden" playsinline preload="auto"
     style="position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 7; background: black; display: none;"></video>
@@ -423,6 +426,7 @@
     const logoRing    = document.getElementById('logo-ring');
     const statusTitle = document.getElementById('status-title');
     const statusSub   = document.getElementById('status-sub');
+    const connectedBg = document.getElementById('connected-bg-img');
 
     // ── State ─────────────────────────────────────────────────────────────
     const NS = 'urn:x-cast:com.bdcast.webrtc';
@@ -523,9 +527,33 @@
     let connectedDeviceName = '';
 
     // ── UI helpers ────────────────────────────────────────────────────────
+    function applyUIVisibility() {
+      if (!connectedBg) return;
+
+      const playerState = playerManager ? playerManager.getPlayerState() : null;
+      const isMediaActive = (playerState === 'PLAYING' || playerState === 'PAUSED' || playerState === 'BUFFERING') 
+        || mediaLoadInProgress 
+        || isImageActive;
+
+      const isMirroringActive = !!(video.srcObject && video.classList.contains('visible'));
+      const isAudioActive = audioOverlay && audioOverlay.style.display === 'flex';
+
+      const showConnectedImage = senderConnected && !isMirroringActive && !isMediaActive && !isAudioActive;
+
+      if (showConnectedImage) {
+        connectedBg.style.display = 'block';
+        overlay.style.display = 'none';
+      } else {
+        connectedBg.style.display = 'none';
+        const shouldHideOverlay = isMirroringActive || isMediaActive || isAudioActive;
+        overlay.style.display = shouldHideOverlay ? 'none' : 'flex';
+      }
+    }
+
     function setStatus(title, sub) {
       statusTitle.textContent = title;
       statusSub.textContent   = sub || '';
+      applyUIVisibility();
     }
 
     function showStream(on) {
@@ -533,6 +561,7 @@
       overlay.style.display = on ? 'none' : 'flex';
       const ambient = document.querySelector('.ambient-bg');
       if (ambient) ambient.style.display = on ? 'none' : 'block';
+      applyUIVisibility();
     }
 
     function setRingState(state) { // 'searching' | 'connected' | 'ended'
@@ -643,6 +672,7 @@
           const ambient = document.querySelector('.ambient-bg');
           if (ambient) ambient.style.display = isMirroringActive ? 'none' : 'block';
         }
+        applyUIVisibility();
       } catch (err) {
         console.error('[Receiver] updateUIForMediaState error:', err);
       }
@@ -702,6 +732,7 @@
           overlay.style.display = 'none';
           const ambient = document.querySelector('.ambient-bg');
           if (ambient) ambient.style.display = 'none';
+          applyUIVisibility();
 
           return loadRequestData;
         }
@@ -1104,11 +1135,13 @@
       audioDisc.classList.remove('paused');
       setEqBarsPaused(false);
       audioTrackTitle.textContent = 'Music';
+      applyUIVisibility();
     }
 
     function hideAudioOverlay() {
       audioOverlay.style.display = 'none';
       isAudioMode = false;
+      applyUIVisibility();
     }
 
     function playMedia(url, autoplay) {
@@ -1274,6 +1307,7 @@
         setRingState('searching');
       }
       if (title !== null) setStatus(title, sub);
+      applyUIVisibility();
     }
   </script>
 </body>
