@@ -476,7 +476,7 @@
 
         context.sendCustomMessage(NS, senderId, {
           type: 'AUDIO_STATE',
-          rv: 6, // receiver revision — lets the phone verify the deployed version
+          rv: 7, // receiver revision — lets the phone verify the deployed version
           audioTracks: audioTracks,
           muted: audioSink.muted,
           volume: audioSink.volume,
@@ -553,20 +553,29 @@
     setInterval(updateObjectFit, 300);
 
     // ── Automatic shutdown ────────────────────────────────────────────────
-    // When the last phone disconnects, show a goodbye state briefly and then
-    // stop the receiver so the TV returns to its home screen instead of
-    // showing this app forever.
+    // When the last phone is truly gone (no sender AND no live stream), wait
+    // a generous grace period before stopping the receiver — the phone app
+    // silently reconnects after transient drops (backgrounding, Wi-Fi blips)
+    // and a reconnect cancels the shutdown. Only after the grace period does
+    // the TV return to its home screen.
     function scheduleShutdown() {
       cancelShutdown();
       setRingState('ended');
-      setStatus('Session ended', 'Closing… Reconnect anytime from the app on your iPhone');
+      setStatus('Waiting for your iPhone…', 'Reconnecting automatically — or start mirroring again from the app');
       shutdownTimer = setTimeout(() => {
         try { context.stop(); } catch (e) { console.warn('[Receiver] stop failed:', e); }
-      }, 8000);
+      }, 60000);
     }
 
     function cancelShutdown() {
       if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
+    }
+
+    // Shuts down only when BOTH the Cast senders and the WebRTC stream are
+    // gone — never while media might still resume.
+    function maybeShutdownIfAbandoned() {
+      const remaining = context.getSenders ? context.getSenders().length : 0;
+      if (remaining === 0 && !senderConnected) scheduleShutdown();
     }
 
     // ── Cast Receiver setup ───────────────────────────────────────────────
@@ -775,18 +784,35 @@
     context.addEventListener(
       cast.framework.system.EventType.SENDER_DISCONNECTED,
       () => {
-        cleanup(null, null);
         senderConnected = false;
-        // Only shut down when no sender remains (multi-sender safety).
+        // Only consider shutdown when no sender remains (multi-sender safety).
         const remaining = context.getSenders ? context.getSenders().length : 0;
-        if (remaining === 0) {
-          scheduleShutdown();
+        if (remaining > 0) return;
+
+        // CRITICAL: a dropped Cast socket does NOT mean mirroring stopped.
+        // WebRTC media flows over its own direct connection and keeps playing
+        // while the phone app streams in the background and silently
+        // reconnects its Cast session. Never tear down a live stream here —
+        // the WebRTC state machine (oniceconnectionstatechange) cleans up if
+        // the media itself dies.
+        const streamLive = !!(pc && video.srcObject &&
+          ['new', 'checking', 'connected', 'completed'].includes(pc.iceConnectionState));
+        if (streamLive) {
+          console.log('[Receiver] sender disconnected but the mirror stream is live — keeping it on screen');
+          return;
         }
+
+        cleanup(null, null);
+        scheduleShutdown();
       }
     );
 
     context.start({
       touchScreenOptimizedApp: false,
+      // Never let CAF kill the receiver just because it looks idle — screen
+      // mirroring plays through a plain <video>/<audio>, which CAF does not
+      // recognise as activity.
+      disableIdleTimeout: true,
       // Ends the session automatically when the sender vanishes without a
       // clean disconnect (phone died, Wi-Fi dropped) — 10 minutes of silence.
       maxInactivity: 600
@@ -914,12 +940,14 @@
               if (conn && conn.iceConnectionState === 'failed') {
                 cleanup('Connection lost', 'Tap “Start Mirroring” on your iPhone to try again');
                 setRingState('connected');
+                maybeShutdownIfAbandoned();
               }
             }, 10000);
             break;
           case 'closed':
             cleanup('Mirroring ended', 'Start mirroring again from your iPhone whenever you like');
             setRingState('ended');
+            maybeShutdownIfAbandoned();
             break;
         }
       };
