@@ -32,7 +32,6 @@
       inset: 0;
       width: 100%; height: 100%;
       object-fit: contain;
-      object-position: center center;
       background: #000;
       opacity: 0;
       transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
@@ -570,10 +569,13 @@
       logoRing.classList.toggle('ended', state === 'ended');
     }
 
-    // Ensure object-fit is contain to prevent stream overflow in all orientations.
+    // Adapt object-fit to stream orientation (portrait ⇄ landscape).
     function updateObjectFit() {
-      if (video.style.objectFit !== 'contain') {
-        video.style.objectFit = 'contain';
+      if (!video.videoWidth || !video.videoHeight) return;
+      const shouldCover = video.videoWidth > video.videoHeight;
+      const isCover     = video.style.objectFit === 'cover';
+      if (shouldCover !== isCover) {
+        video.style.objectFit = shouldCover ? 'cover' : 'contain';
       }
     }
     video.addEventListener('resize', updateObjectFit);
