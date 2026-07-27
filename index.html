@@ -569,13 +569,11 @@
       logoRing.classList.toggle('ended', state === 'ended');
     }
 
-    // Adapt object-fit to stream orientation (portrait ⇄ landscape).
+    // Ensure stream always uses contain so full iPad/iPhone screen is visible without cropping or overflow.
     function updateObjectFit() {
       if (!video.videoWidth || !video.videoHeight) return;
-      const shouldCover = video.videoWidth > video.videoHeight;
-      const isCover     = video.style.objectFit === 'cover';
-      if (shouldCover !== isCover) {
-        video.style.objectFit = shouldCover ? 'cover' : 'contain';
+      if (video.style.objectFit !== 'contain') {
+        video.style.objectFit = 'contain';
       }
     }
     video.addEventListener('resize', updateObjectFit);
