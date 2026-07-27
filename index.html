@@ -46,6 +46,14 @@
       width: 100%; height: 100%;
       z-index: 1; /* Keep base player active so CAF binds and plays successfully */
       background: #000;
+      --object-fit: contain;
+    }
+    cast-media-player::part(video),
+    cast-media-player video,
+    #video {
+      object-fit: contain !important;
+      max-width: 100vw !important;
+      max-height: 100vh !important;
     }
 
     /* ── Ambient Background Glows ── */
